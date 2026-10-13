@@ -1,0 +1,54 @@
+# tab-automation
+
+Always-on Discord agent + scheduled workflow automation. Built fresh (Harness was judged substandard) for the Samsung Tab (SM-T595) running Termux.
+
+## What it does
+
+1. **Always-on Discord listener** (`src/discord.js`)
+   - Responds when mentioned, in DMs, or in allowlisted channels (`DISCORD_LISTEN_CHANNELS`)
+   - `!review <text>` triggers the `ask-review` workflow (coder agent -> Discord post -> conditional escalation)
+   - Uses your existing bot token/app/guild from `Harness/.env.local`
+2. **Scheduled + configurable workflows** (`config/workflows.json`, `src/workflow.js`, `src/scheduler.js`)
+   - Step types: `agent` (Azure OpenAI), `discord_send`, `condition`, `delay`, `http`, `log`
+   - Templates: `{{steps.<id>}}`, `{{trigger.text}}`, `{{now}}`, `{{date}}`
+   - Cron: 5-field `m h dom mon dow`, checked every 30s
+3. **Configurable agents** (`config/agents.json`) — each maps to an Azure OpenAI deployment + system prompt. JSON now, UX later.
+
+## Quick start (PC side)
+
+```sh
+cd tab-automation
+npm install
+cp .env.example .env   # fill in secrets
+node src/validate.js   # checks config + cross-references
+node src/index.js --list
+node src/index.js --run ping-test   # manual workflow smoke test (no Discord login)
+node src/index.js                   # full run: Discord + scheduler
+```
+
+## Deploy to the Tab (Termux)
+
+Prereqs on the Tab: **Termux** (installed ✓), plus **Termux:Boot** from F-Droid for autostart. Enable Developer Mode in Discord app to copy channel IDs. In the Discord Developer Portal, enable the **Message Content Intent** (Bot -> Privileged Gateway Intents), otherwise the listener cannot read message text.
+
+```sh
+# 1) On PC: push project to the Tab
+adb push tab-automation /sdcard/tab-automation
+
+# 2) Inside Termux on the Tab:
+bash /sdcard/tab-automation/termux-setup.sh
+nano ~/tab-automation/.env   # fill DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, AZURE_OPENAI_*
+node ~/tab-automation/src/validate.js
+bash ~/tab-automation/termux/run.sh
+```
+
+Keepalive: `run.sh` holds a wake lock and restarts the bot on crash. Leave the Tab on WiFi + charging. `~/.termux/boot/` entry autostarts after reboot (needs Termux:Boot app).
+
+## Config reference
+
+- `config/agents.json` — add agents: `{ id, systemPrompt, deployment?, temperature?, maxTokens? }`. `deployment: "env:VAR"` allows per-agent overrides.
+- `config/workflows.json` — add workflows with `trigger` (`schedule`+`cron` | `discord`+`command` | `manual`) and `steps[]`.
+- `.env` — `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID` (notify target), `DISCORD_LISTEN_CHANNELS` (optional), `AZURE_OPENAI_ENDPOINT/KEY/DEPLOYMENT`.
+
+## Discord setup reuse
+
+Bot token / app ID / guild from `Harness/.env.local` are reused. Only new value needed: `DISCORD_CHANNEL_ID` for notifications. `DISCORD_LISTEN_CHANNELS` empty = mention/DM only (safest).

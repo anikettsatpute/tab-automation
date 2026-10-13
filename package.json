@@ -1,0 +1,20 @@
+{
+  "name": "tab-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Always-on Discord agent + scheduled workflow automation for Samsung Tab (Termux).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "validate": "node src/validate.js",
+    "list": "node src/index.js --list"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2"
+  }
+}

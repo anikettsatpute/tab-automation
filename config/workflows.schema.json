@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tab-automation workflows.json",
+  "description": "Configurable multi-step workflows. Trigger types: schedule | discord | manual. Step types: agent | discord_send | condition | delay | http | log.",
+  "type": "object",
+  "required": ["workflows"],
+  "properties": {
+    "workflows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "steps"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "trigger": {
+            "type": "object",
+            "properties": {
+              "type": { "enum": ["schedule", "discord", "manual"] },
+              "cron": { "type": "string", "description": "5-field cron 'm h dom mon dow' when type=schedule." },
+              "command": { "type": "string", "description": "Discord command word after ! e.g. 'review' when type=discord." },
+              "description": { "type": "string" }
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "type"],
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "enum": ["agent", "discord_send", "condition", "delay", "http", "log"] },
+                "agent": { "type": "string" },
+                "prompt": { "type": "string" },
+                "saveAs": { "type": "string" },
+                "channel": { "type": "string" },
+                "message": { "type": "string" },
+                "condition": {
+                  "type": "object",
+                  "properties": {
+                    "left": { "type": "string" },
+                    "operator": { "enum": ["contains", "not_contains", "equals", "not_equals", "matches", "longer_than"] },
+                    "right": { "type": "string" }
+                  }
+                },
+                "then": { "type": "array" },
+                "else": { "type": "array" },
+                "ms": { "type": "integer" },
+                "url": { "type": "string" },
+                "method": { "type": "string" },
+                "headers": { "type": "object" },
+                "body": { "type": "string" },
+                "text": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "workflows": [
+    {
+      "id": "morning-briefing",
+      "name": "Morning briefing",
+      "description": "Scheduled demo: summarizer agent -> conditional Discord post.",
+      "trigger": { "type": "schedule", "cron": "30 8 * * *", "description": "08:30 Asia/Kolkata daily" },
+      "steps": [
+        {
+          "id": "draft",
+          "type": "agent",
+          "agent": "summarizer",
+          "prompt": "Today is {{date}}. Draft a 5-line morning briefing template: date, top 3 focus slots, one reminder to check Harness tasks. Keep it generic until wired to real sources.",
+          "saveAs": "briefing"
+        },
+        {
+          "id": "notify",
+          "type": "discord_send",
+          "message": "☀️ Morning briefing\n\n{{steps.draft}}"
+        }
+      ]
+    },
+    {
+      "id": "ask-review",
+      "name": "On-demand review",
+      "description": "Triggered from Discord with !review <text>. Runs coder agent, posts result, conditionally pings.",
+      "trigger": { "type": "discord", "command": "review" },
+      "steps": [
+        {
+          "id": "review",
+          "type": "agent",
+          "agent": "coder",
+          "prompt": "Review the following request/code and give findings + minimal suggestion:\n\n{{trigger.text}}",
+          "saveAs": "review"
+        },
+        {
+          "id": "post",
+          "type": "discord_send",
+          "message": "🔍 Review result:\n\n{{steps.review}}"
+        },
+        {
+          "id": "escalate?",
+          "type": "condition",
+          "condition": { "left": "{{steps.review}}", "operator": "contains", "right": "urgent" },
+          "then": [{ "id": "ping", "type": "discord_send", "message": "⚠️ The review mentions *urgent* — please take a look." }]
+        }
+      ]
+    },
+    {
+      "id": "ping-test",
+      "name": "Ping test",
+      "description": "Manual smoke test: node src/index.js --run ping-test",
+      "trigger": { "type": "manual" },
+      "steps": [
+        { "id": "hello", "type": "log", "text": "ping-test workflow executed at {{now}}" },
+        { "id": "announce", "type": "discord_send", "message": "✅ tab-automation is alive ({{now}})." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tab-automation agents.json",
+  "description": "Configurable agents. Each agent maps to an Azure OpenAI chat-completions deployment + system prompt.",
+  "type": "object",
+  "required": ["agents"],
+  "properties": {
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "systemPrompt"],
+        "properties": {
+          "id": { "type": "string", "description": "Referenced by workflows as steps[].agent and by the Discord listener." },
+          "description": { "type": "string" },
+          "systemPrompt": { "type": "string" },
+          "deployment": { "type": "string", "description": "Azure deployment name. Supports env:VAR_NAME. Omit = AZURE_OPENAI_DEPLOYMENT." },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+          "maxTokens": { "type": "integer", "minimum": 1, "maximum": 128000 }
+        }
+      }
+    }
+  }
+}

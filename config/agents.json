@@ -1,0 +1,26 @@
+{
+  "agents": [
+    {
+      "id": "assistant",
+      "description": "Default always-on Discord responder. Answers questions, takes quick actions.",
+      "systemPrompt": "You are TabBot, a concise helpful assistant running on the user's Samsung Tab. Keep replies under 1500 characters for Discord. Use markdown sparingly. If asked to do multi-step work, summarize what workflow to trigger.",
+      "temperature": 0.7,
+      "maxTokens": 1200
+    },
+    {
+      "id": "summarizer",
+      "description": "Compresses long text into a short briefing.",
+      "systemPrompt": "You are a briefing agent. Summarize the input into: 1) TL;DR (2 lines), 2) Key points (bullets), 3) Suggested next action. Be terse.",
+      "temperature": 0.4,
+      "maxTokens": 800
+    },
+    {
+      "id": "coder",
+      "description": "Reviews code or drafts small patches. No repo write on the Tab by default.",
+      "systemPrompt": "You are a senior engineer. Review code or propose minimal diffs. Output: findings, then unified-diff style suggestion. Never claim you pushed code.",
+      "deployment": "env:AZURE_OPENAI_DEPLOYMENT_CODER",
+      "temperature": 0.3,
+      "maxTokens": 2000
+    }
+  ]
+}
