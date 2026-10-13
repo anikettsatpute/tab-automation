@@ -7,12 +7,23 @@ Always-on Discord agent + scheduled workflow automation. Built fresh (Harness wa
 1. **Always-on Discord listener** (`src/discord.js`)
    - Responds when mentioned, in DMs, or in allowlisted channels (`DISCORD_LISTEN_CHANNELS`)
    - `!review <text>` triggers the `ask-review` workflow (coder agent -> Discord post -> conditional escalation)
+   - `!finance india|us` runs a pre-market briefing on demand
+   - `!remember <text>` stores a memory, `!recall <query>` searches it, `!memory` shows stats
+   - Every mention/DM is auto-saved to memory; relevant past context is injected into replies
+   - Agent calls web tools live: `web_search`, `web_news`, `web_fetch`
    - Uses your existing bot token/app/guild from `Harness/.env.local`
 2. **Scheduled + configurable workflows** (`config/workflows.json`, `src/workflow.js`, `src/scheduler.js`)
-   - Step types: `agent` (Azure OpenAI), `discord_send`, `condition`, `delay`, `http`, `log`
+   - Step types: `agent` (Azure OpenAI, with tools + memory by default), `discord_send`, `condition`, `delay`, `http`, `log`, `finance`, `web` (search/fetch/news), `remember`, `recall`
    - Templates: `{{steps.<id>}}`, `{{trigger.text}}`, `{{now}}`, `{{date}}`
    - Cron: 5-field `m h dom mon dow`, checked every 30s
-3. **Configurable agents** (`config/agents.json`) — each maps to an Azure OpenAI deployment + system prompt. JSON now, UX later.
+3. **Finance briefings** (`src/finance*.js`, `config/watchlists.json`)
+   - 30 NSE + 30 US stocks, Yahoo closes, Google News RSS, Reddit pulse
+   - `premarket-india` 08:45 IST weekdays, `premarket-us` 18:30 IST weekdays
+   - History in `data/finance/YYYY-MM-DD-<market>.json`
+4. **Memory** (`src/memory.js`, `data/memory/memory.jsonl`)
+   - Zero-cost keyword retrieval (token overlap + recency), no embeddings/API spend
+   - Auto-saves chats + replies; `!remember`/`!recall` for manual control
+5. **Configurable agents** (`config/agents.json`) — each maps to an Azure OpenAI deployment + system prompt. JSON now, UX later.
 
 ## Quick start (PC side)
 
