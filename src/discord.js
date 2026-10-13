@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Events } from "discord.js";
-import { chatCompletion } from "./azure.js";
+import { chatWithTools } from "./agent.js";
 import { chunk } from "./workflow.js";
+import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.js";
 
 export function startDiscord(cfg, deps) {
   const client = new Client({
@@ -26,6 +27,22 @@ export function startDiscord(cfg, deps) {
       // 1) !command workflows (e.g. !review <text>)
       if (text.startsWith("!")) {
         const [cmd, ...rest] = text.slice(1).split(/\s+/);
+        if (cmd === "remember" && rest.length) {
+          saveMemory(cfg.root, { kind: "note", user: msg.author.tag, text: rest.join(" "), channelId: msg.channelId });
+          await msg.reply("Noted — I'll remember that.");
+          return;
+        }
+        if (cmd === "recall") {
+          const hits = searchMemory(cfg.root, rest.join(" ") || text, 5);
+          const reply = `🧠 What I recall:\n${formatMemories(hits)}`;
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
+        if (cmd === "memory") {
+          const s = memoryStats(cfg.root);
+          await msg.reply(`🧠 Memory: ${s.total} entries. Oldest ${s.oldest ?? "—"}, newest ${s.newest ?? "—"}.`);
+          return;
+        }
         const wf = cfg.workflows.find(
           (w) => w.trigger?.type === "discord" && w.trigger?.command === cmd
         );
@@ -54,7 +71,12 @@ export function startDiscord(cfg, deps) {
         .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
         .trim() || "Hello";
       await msg.channel.sendTyping().catch(() => {});
-      const reply = await chatCompletion(cfg, "assistant", `User ${msg.author.tag} says: ${prompt}`);
+      // Persist + recall: every mention/DM is saved, relevant past context is injected
+      saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text: prompt, channelId: msg.channelId });
+      const hits = searchMemory(cfg.root, prompt, 5).filter((h) => h.text !== prompt);
+      const memCtx = formatMemories(hits);
+      const reply = await chatWithTools(cfg, "assistant", `User ${msg.author.tag} says: ${prompt}`, { extraContext: memCtx });
+      saveMemory(cfg.root, { kind: "reply", user: "TabBot", text: reply.slice(0, 500), channelId: msg.channelId });
       for (const part of chunk(reply)) await msg.reply(part);
     } catch (err) {
       deps.log?.(`[discord] message handler failed: ${err.message}`);

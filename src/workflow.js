@@ -1,4 +1,7 @@
 import { chatCompletion } from "./azure.js";
+import { chatWithTools } from "./agent.js";
+import { runTool } from "./webtools.js";
+import { saveMemory, searchMemory, formatMemories } from "./memory.js";
 import { runFinanceBriefing } from "./finance-brief.js";
 
 const MAX_DISCORD = 1900;
@@ -67,7 +70,10 @@ async function runStep(cfg, deps, step, ctx) {
   switch (step.type) {
     case "agent": {
       const prompt = renderTemplate(step.prompt ?? "", ctx);
-      const out = await chatCompletion(cfg, step.agent, prompt);
+      const mem = step.memory === false ? "" : formatMemories(searchMemory(cfg.root, prompt, 4));
+      const out = step.tools === false
+        ? await chatCompletion(cfg, step.agent, prompt)
+        : await chatWithTools(cfg, step.agent, prompt, { extraContext: mem });
       if (step.saveAs) ctx.steps[step.saveAs] = out;
       ctx.steps[step.id] = out;
       return out;
@@ -118,6 +124,31 @@ async function runStep(cfg, deps, step, ctx) {
       if (step.saveAs) ctx.steps[step.saveAs] = result.message;
       ctx.steps[step.id] = result.message;
       return result.message;
+    }
+    case "web": {
+      const action = (step.action ?? "search").toLowerCase();
+      const arg = renderTemplate(step.query ?? step.url ?? step.topic ?? "", ctx);
+      let out;
+      if (action === "fetch") out = await runTool("web_fetch", { url: arg });
+      else if (action === "news") out = await runTool("web_news", { topic: arg, region: step.region ?? "IN" });
+      else out = await runTool("web_search", { query: arg, count: step.count ?? 6 });
+      if (step.saveAs) ctx.steps[step.saveAs] = out;
+      ctx.steps[step.id] = out;
+      return out;
+    }
+    case "remember": {
+      const text = renderTemplate(step.text ?? "", ctx);
+      saveMemory(cfg.root, { kind: step.kind ?? "note", user: "workflow", text, channelId: "" });
+      ctx.steps[step.id] = text;
+      return text;
+    }
+    case "recall": {
+      const q = renderTemplate(step.query ?? "", ctx);
+      const hits = searchMemory(cfg.root, q, step.limit ?? 5);
+      const out = formatMemories(hits);
+      if (step.saveAs) ctx.steps[step.saveAs] = out;
+      ctx.steps[step.id] = out;
+      return out;
     }
     default:
       throw new Error(`Unknown step type '${step.type}' in step '${step.id}'`);

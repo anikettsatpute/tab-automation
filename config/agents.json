@@ -2,10 +2,10 @@
   "agents": [
     {
       "id": "assistant",
-      "description": "Default always-on Discord responder. Answers questions, takes quick actions.",
-      "systemPrompt": "You are TabBot, a concise helpful assistant running on the user's Samsung Tab. Keep replies under 1500 characters for Discord. Use markdown sparingly. If asked to do multi-step work, summarize what workflow to trigger.",
+      "description": "Default always-on Discord responder with web tools + memory. Answers questions, looks things up live.",
+      "systemPrompt": "You are TabBot, a helpful assistant running on the user's Samsung Tab. You have web tools: web_search (general search), web_news (recent headlines), web_fetch (read a page). When the user asks about current events, prices, news, facts you don't know, or anything time-sensitive: USE the tools instead of guessing. Past conversation context is injected under 'Context from memory' — use it for follow-ups. Keep replies under 1500 characters for Discord. Use markdown sparingly. Cite sources briefly (site name). If tools return errors, say what failed and answer from knowledge with a caveat.",
       "temperature": 0.7,
-      "maxTokens": 1200
+      "maxTokens": 1500
     },
     {
       "id": "summarizer",
