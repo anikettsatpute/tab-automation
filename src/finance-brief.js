@@ -1,20 +1,38 @@
 import { chatCompletion } from "./azure.js";
 import {
   getQuotes, getNews, getReddit, saveBriefing, loadRecentBriefings, loadWatchlists,
+  loadQuoteCache, saveQuoteCache,
 } from "./finance.js";
 import { chunk } from "./workflow.js";
+
+export function flattenWatchlist(entry) {
+  if (Array.isArray(entry)) return entry.map((c) => ({ ...c, cap: "unknown" }));
+  const out = [];
+  for (const c of entry?.large ?? []) out.push({ ...c, cap: "large" });
+  for (const c of entry?.small ?? []) out.push({ ...c, cap: "small" });
+  return out;
+}
 
 // Shared by CLI (finance-run.js) and workflow step type "finance".
 export async function runFinanceBriefing(cfg, deps, { market = "india", post = true, channel } = {}) {
   const watchlists = loadWatchlists(cfg.root);
-  const list = watchlists[market];
-  if (!list) throw new Error(`Unknown market '${market}'`);
+  const list = flattenWatchlist(watchlists[market]);
+  if (!list.length) throw new Error(`Unknown market '${market}'`);
+  const capOf = (symbol) => list.find((c) => c.symbol === symbol)?.cap ?? "?";
   const region = market === "india" ? "IN" : "US";
   const marketLabel = market === "india" ? "NSE (opens 09:15 IST)" : "US (opens 19:00 IST / 9:30 ET)";
 
-  deps.log?.(`[finance:${market}] fetching ${list.length} quotes...`);
+  deps.log?.(`[finance:${market}] fetching ${list.length} quotes (${list.filter((c) => c.cap === "large").length} large + ${list.filter((c) => c.cap === "small").length} small)...`);
   const quotes = await getQuotes(list.map((c) => c.symbol));
+  saveQuoteCache(cfg.root, quotes);
+  const cache = loadQuoteCache(cfg.root);
+  const failed = quotes.filter((q) => q.error).map((q) => q.symbol);
+  // Fill gaps from last-good cache so one bad Yahoo run doesn't gut the briefing
   const okQuotes = quotes.filter((q) => !q.error);
+  for (const sym of failed) {
+    if (cache[sym]) okQuotes.push({ ...cache[sym], stale: true });
+  }
+  deps.log?.(`[finance:${market}] quotes: ${okQuotes.filter((q) => !q.stale).length} fresh + ${okQuotes.filter((q) => q.stale).length} cached, ${failed.filter((s) => !cache[s]).length} missing`);
   const movers = [...okQuotes].sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)).slice(0, 10);
 
   deps.log?.(`[finance:${market}] fetching news + reddit...`);
@@ -34,11 +52,12 @@ export async function runFinanceBriefing(cfg, deps, { market = "india", post = t
   const agentId = market === "india" ? "finance-india" : "finance-us";
   const prompt = [
     `Date: ${new Date().toISOString().slice(0, 10)}. Market: ${marketLabel}.`,
+    `Watchlist: 15 LARGE-CAP (stable) + 15 SMALL-CAP/VOLATILE (high risk/reward). Cap is tagged per stock.`,
     ``,
     `Watchlist closes (prev session):`,
-    okQuotes.map((q) => `- ${q.symbol} (${q.name}): ${q.last} ${q.currency}, ${q.changePct >= 0 ? "+" : ""}${q.changePct}%`).join("\n"),
+    okQuotes.map((q) => `- [${capOf(q.symbol).toUpperCase()}]${q.stale ? " (cached, may be stale)" : ""} ${q.symbol} (${q.name}): ${q.last} ${q.currency}, ${q.changePct >= 0 ? "+" : ""}${q.changePct}%`).join("\n"),
     ``,
-    `Biggest movers: ${movers.map((m) => `${m.symbol} ${m.changePct}%`).join(", ")}`,
+    `Biggest movers: ${movers.map((m) => `${m.symbol} [${capOf(m.symbol)}] ${m.changePct}%`).join(", ")}`,
     ``,
     `Market headlines:`,
     marketNews.slice(0, 6).map((n) => `- ${n.title} (${n.source})`).join("\n"),

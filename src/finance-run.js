@@ -2,6 +2,7 @@ import { loadConfig } from "./config.js";
 import { chatCompletion } from "./azure.js";
 import {
   getQuotes, getNews, getReddit, saveBriefing, loadRecentBriefings, loadWatchlists,
+  loadQuoteCache, saveQuoteCache,
 } from "./finance.js";
 import { chunk } from "./workflow.js";
 import { Client, GatewayIntentBits } from "discord.js";
@@ -26,13 +27,21 @@ const chIdx = process.argv.indexOf("--channel");
 const channelOverride = chIdx !== -1 ? process.argv[chIdx + 1] : undefined;
 
 const watchlists = loadWatchlists(process.cwd());
-const list = watchlists[market];
+const { flattenWatchlist } = await import("./finance-brief.js");
+const list = flattenWatchlist(watchlists[market]);
+const capOf = (symbol) => list.find((c) => c.symbol === symbol)?.cap ?? "?";
 const region = market === "india" ? "IN" : "US";
 const marketLabel = market === "india" ? "🇮🇳 NSE (opens 09:15 IST)" : "🇺🇸 US (opens 19:00 IST / 9:30 ET)";
 
 console.log(`Fetching ${list.length} quotes for ${market}...`);
 const quotes = await getQuotes(list.map((c) => c.symbol));
+saveQuoteCache(process.cwd(), quotes);
+const cache = loadQuoteCache(process.cwd());
 const okQuotes = quotes.filter((q) => !q.error);
+for (const q of quotes.filter((x) => x.error)) {
+  if (cache[q.symbol]) okQuotes.push({ ...cache[q.symbol], stale: true });
+}
+console.log(`Quotes: ${okQuotes.filter((q) => !q.stale).length} fresh + ${okQuotes.filter((q) => q.stale).length} cached`);
 const movers = [...okQuotes].sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)).slice(0, 10);
 
 console.log(`Top movers: ${movers.map((m) => `${m.symbol} ${m.changePct}%`).join(", ")}`);
@@ -60,11 +69,12 @@ const historyNote = history.length
 const agentId = market === "india" ? "finance-india" : "finance-us";
 const prompt = [
   `Date: ${new Date().toISOString().slice(0, 10)}. Market: ${marketLabel}.`,
+  `Watchlist: 15 LARGE-CAP (stable) + 15 SMALL-CAP/VOLATILE (high risk/reward). Cap is tagged per stock.`,
   ``,
   `Watchlist closes (prev session):`,
-  okQuotes.map((q) => `- ${q.symbol} (${q.name}): ${q.last} ${q.currency}, ${q.changePct >= 0 ? "+" : ""}${q.changePct}%`).join("\n"),
+  okQuotes.map((q) => `- [${capOf(q.symbol).toUpperCase()}]${q.stale ? " (cached, may be stale)" : ""} ${q.symbol} (${q.name}): ${q.last} ${q.currency}, ${q.changePct >= 0 ? "+" : ""}${q.changePct}%`).join("\n"),
   ``,
-  `Biggest movers: ${movers.map((m) => `${m.symbol} ${m.changePct}%`).join(", ")}`,
+  `Biggest movers: ${movers.map((m) => `${m.symbol} [${capOf(m.symbol)}] ${m.changePct}%`).join(", ")}`,
   ``,
   `Market headlines:`,
   marketNews.slice(0, 6).map((n) => `- ${n.title} (${n.source})`).join("\n"),

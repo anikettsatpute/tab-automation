@@ -43,24 +43,49 @@ export async function getQuote(symbol, attempt = 0) {
     };
   } catch (err) {
     const msg = String(err.message || err);
-    // Rotate host + backoff on rate limit, up to 3 attempts
-    if (/429/.test(msg) && attempt < 3) {
+    // Rotate host + backoff on rate limit, up to 5 attempts
+    if (/429/.test(msg) && attempt < 5) {
       yahooHostIdx += 1;
-      await sleep(1500 * (attempt + 1));
+      await sleep(2000 * (attempt + 1));
       return getQuote(symbol, attempt + 1);
     }
     return { symbol, error: msg.slice(0, 120) };
   }
 }
 
-export async function getQuotes(symbols, concurrency = 4) {
+export async function getQuotes(symbols, concurrency = 2) {
   const out = [];
   for (let i = 0; i < symbols.length; i += concurrency) {
     const batch = await Promise.all(symbols.slice(i, i + concurrency).map((s) => getQuote(s)));
     out.push(...batch);
-    if (i + concurrency < symbols.length) await sleep(1200); // stay under Yahoo rate limit
+    if (i + concurrency < symbols.length) await sleep(2500); // stay under Yahoo rate limit
   }
   return out;
+}
+
+// --- Quote cache: last-good quotes so briefings survive Yahoo 429s ---
+export function loadQuoteCache(root) {
+  const file = path.join(root, "data", "finance", "quotes-cache.json");
+  try {
+    if (!existsSync(file)) return {};
+    return JSON.parse(readFileSync(file, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+export function saveQuoteCache(root, quotes) {
+  const dir = path.join(root, "data", "finance");
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "quotes-cache.json");
+  let cache = loadQuoteCache(root);
+  for (const q of quotes) {
+    if (!q.error) cache[q.symbol] = { ...q, cachedAt: new Date().toISOString() };
+  }
+  try {
+    writeFileSync(file, JSON.stringify(cache, null, 2));
+  } catch { /* best effort */ }
+  return cache;
 }
 
 function round2(n) {
