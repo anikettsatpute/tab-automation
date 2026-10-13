@@ -55,6 +55,33 @@
         { "id": "hello", "type": "log", "text": "ping-test workflow executed at {{now}}" },
         { "id": "announce", "type": "discord_send", "message": "✅ tab-automation is alive ({{now}})." }
       ]
+    },
+    {
+      "id": "premarket-india",
+      "name": "India pre-market briefing",
+      "description": "08:45 IST weekdays = 30 min before NSE 09:15 open. Quotes + news + Reddit -> finance-india agent -> #finance.",
+      "trigger": { "type": "schedule", "cron": "45 8 * * 1-5", "description": "08:45 IST Mon-Fri" },
+      "steps": [
+        { "id": "brief", "type": "finance", "market": "india", "saveAs": "india_brief" }
+      ]
+    },
+    {
+      "id": "premarket-us",
+      "name": "US pre-market briefing",
+      "description": "18:30 IST weekdays = 60 min before US 19:00 IST open. Quotes + news + Reddit -> finance-us agent -> #finance.",
+      "trigger": { "type": "schedule", "cron": "30 18 * * 1-5", "description": "18:30 IST Mon-Fri" },
+      "steps": [
+        { "id": "brief", "type": "finance", "market": "us", "saveAs": "us_brief" }
+      ]
+    },
+    {
+      "id": "finance-now",
+      "name": "On-demand finance briefing",
+      "description": "Discord: !finance india|us. Runs the briefing immediately.",
+      "trigger": { "type": "discord", "command": "finance" },
+      "steps": [
+        { "id": "brief", "type": "finance", "market": "{{trigger.text}}", "saveAs": "brief" }
+      ]
     }
   ]
 }

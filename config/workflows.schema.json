@@ -30,8 +30,10 @@
               "required": ["id", "type"],
               "properties": {
                 "id": { "type": "string" },
-                "type": { "enum": ["agent", "discord_send", "condition", "delay", "http", "log"] },
+                "type": { "enum": ["agent", "discord_send", "condition", "delay", "http", "log", "finance"] },
                 "agent": { "type": "string" },
+                "market": { "type": "string", "description": "finance step: india | us (templates allowed)." },
+                "post": { "type": "boolean", "description": "finance step: post to Discord. Default true." },
                 "prompt": { "type": "string" },
                 "saveAs": { "type": "string" },
                 "channel": { "type": "string" },

@@ -1,4 +1,5 @@
 import { chatCompletion } from "./azure.js";
+import { runFinanceBriefing } from "./finance-brief.js";
 
 const MAX_DISCORD = 1900;
 
@@ -105,6 +106,18 @@ async function runStep(cfg, deps, step, ctx) {
       deps.log?.(`[${ctx.workflow}] ${text}`);
       ctx.steps[step.id] = text;
       return text;
+    }
+    case "finance": {
+      const rawMarket = renderTemplate(step.market ?? "india", ctx).trim().toLowerCase();
+      const market = rawMarket.includes("us") ? "us" : "india";
+      const result = await runFinanceBriefing(cfg, deps, {
+        market,
+        post: step.post !== false,
+        channel: renderTemplate(step.channel ?? "", ctx) || undefined,
+      });
+      if (step.saveAs) ctx.steps[step.saveAs] = result.message;
+      ctx.steps[step.id] = result.message;
+      return result.message;
     }
     default:
       throw new Error(`Unknown step type '${step.type}' in step '${step.id}'`);

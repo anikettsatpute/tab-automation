@@ -31,6 +31,7 @@ export function loadConfig() {
       applicationId: str("DISCORD_APPLICATION_ID"),
       guildId: str("DISCORD_GUILD_ID"),
       channelId: str("DISCORD_CHANNEL_ID"),
+      financeChannelId: str("FINANCE_CHANNEL_ID") || str("DISCORD_CHANNEL_ID"),
       listenChannels: str("DISCORD_LISTEN_CHANNELS")
         .split(",")
         .map((s) => s.trim())
