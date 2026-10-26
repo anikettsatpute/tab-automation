@@ -24,22 +24,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function getQuote(symbol, attempt = 0) {
   const host = YAHOO_HOSTS[(yahooHostIdx + attempt) % YAHOO_HOSTS.length];
   try {
-    const raw = await fetchText(`${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`);
+    // range=1mo guarantees >=2 trading closes across weekends/holidays.
+    // range=5d was dropping the prior session (e.g. Mon close missing on Tue).
+    const raw = await fetchText(`${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1mo`);
     const data = JSON.parse(raw);
     const result = data?.chart?.result?.[0];
-    const closes = (result?.indicators?.quote?.[0]?.close ?? []).filter((c) => c != null);
+    const stamps = result?.timestamp ?? [];
+    const rawCloses = result?.indicators?.quote?.[0]?.close ?? [];
+    // Pair timestamps with non-null closes, then take last 2 TRADING sessions.
+    const sessions = stamps.map((t, i) => ({ t, c: rawCloses[i] })).filter((s) => s.c != null);
+    if (sessions.length < 2) return { symbol, error: "insufficient data" };
+    const prev = sessions[sessions.length - 2];
+    const last = sessions[sessions.length - 1];
+    const changePct = ((last.c - prev.c) / prev.c) * 100;
     const meta = result?.meta ?? {};
-    if (closes.length < 2) return { symbol, error: "insufficient data" };
-    const prev = closes[closes.length - 2];
-    const last = closes[closes.length - 1];
-    const changePct = ((last - prev) / prev) * 100;
+    const fmt = (t) => new Date(t * 1000).toISOString().slice(0, 10);
     return {
       symbol,
       name: meta.longName || meta.shortName || symbol,
       currency: meta.currency || "",
-      last: round2(last),
-      prevClose: round2(prev),
+      last: round2(last.c),
+      prevClose: round2(prev.c),
       changePct: round2(changePct),
+      lastDate: fmt(last.t),
+      prevDate: fmt(prev.t),
     };
   } catch (err) {
     const msg = String(err.message || err);
