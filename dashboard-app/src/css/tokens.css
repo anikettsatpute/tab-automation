@@ -1,0 +1,14 @@
+/* Design tokens: colors, type, radius. Single source of truth for themes. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
+:root {
+  --bg: #0b0e14; --panel: #11161f; --panel-2: #151c28; --panel-3: #1c2534;
+  --line: #2a3547; --line-soft: #1e2836; --txt: #eef2f8; --dim: #a8b5c9; --faint: #8b98ad;
+  --acc: #5b9dff; --acc-2: #8b5cf6; --acc-soft: rgba(91,157,255,.13);
+  --ok: #34d399; --ok-soft: rgba(52,211,153,.12); --bad: #f87171; --bad-soft: rgba(248,113,113,.12);
+  --warn: #fbbf24; --radius: 12px;
+  --font: "Inter", system-ui, sans-serif; --mono: "JetBrains Mono", monospace;
+}
+/* light theme (topbar toggle) */
+body[data-theme="light"] { --bg: #f4f6fb; --panel: #ffffff; --panel-2: #f1f4f9; --panel-3: #e6ebf3; --line: #d5dce8; --line-soft: #e3e8f1; --txt: #16202e; --dim: #4b5a70; --faint: #7b8aa0; --acc-soft: rgba(37,99,235,.1); }
+body[data-theme="light"] .top input, body[data-theme="light"] .chatbox input, body[data-theme="light"] .fld textarea, body[data-theme="light"] .fld select, body[data-theme="light"] .tbar select, body[data-theme="light"] .sel { background: #fff; }
+body[data-theme="light"] .lrow, body[data-theme="light"] .endgoal, body[data-theme="light"] .out, body[data-theme="light"] .pbar { background: #eef1f6; }
