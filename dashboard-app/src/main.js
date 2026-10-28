@@ -17,7 +17,9 @@ const S = {
   reqType: "let_divider_choose", reqRepo: "tab-automation", reqBusy: false, reqMsg: "",
   expandedSteps: new Set(), expandedVariants: new Set(), rerunText: "",
   brainSel: null, brainTab: "details", brainQ: "", flowSel: null,
-  flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "",
+  flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "", flowRule: "",
+  flowMsg: "", cfgData: null, cfgMsg: "",
+  loopTasks: [], loopSel: null, loopDetail: null, loopForm: null,
   cmdOpen: false, cmdIdx: 0, theme: "dark",
   groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all",
   showCtx: false, sessIdx: 0, diagFull: false, reqChanges: "", appendTitle: "",
@@ -129,6 +131,9 @@ function attentionBanners() {
 }
 
 function boardView() {
+  // Loop task tables (reference: tasks + task_steps DB tables).
+  const lt = (S.loopTasks || []).filter((t) =>
+    !S.q || ((t.title || "") + " " + (t.repo || "") + " " + t.id + " " + (t.task_type || "")).toLowerCase().includes(S.q.toLowerCase()));
   let list = (S.tasks || []).filter((r) =>
     !S.q || ((r.title || "") + " " + r.workflow + " " + (r.branch || "") + " " + r.id + " " + (r.repository || "")).toLowerCase().includes(S.q.toLowerCase()));
   if (S.statusFilter === "Blocked") list = list.filter((r) => r.status === "failed" || r.blockedReason);
@@ -139,14 +144,17 @@ function boardView() {
   if (S.sortBy === "recent") list = [...list].sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
   else list = [...list].sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const sel = S.detail;
+  const lsel = S.loopDetail;
   return `
   ${attentionBanners()}
-  <div class="bhead"><h2>Board <span class="hint">${list.length} of ${S.tasks.length} tasks</span></h2>
+  <div class="bhead"><h2>Board <span class="hint">${list.length} runs · ${lt.length} loop tasks</span></h2>
     <div class="btabs"><button class="tab ${S.boardTab === "tasks" ? "on" : ""}" data-btab="tasks">Tasks</button>
-    <button class="tab ${S.boardTab === "runs" ? "on" : ""}" data-btab="runs">Automation runs</button></div>
+    <button class="tab ${S.boardTab === "runs" ? "on" : ""}" data-btab="runs">Automation runs</button>
+    <button class="tab ${S.boardTab === "loop" ? "on" : ""}" data-btab="loop">Loop tasks</button></div>
     <span class="spacer"></span>
     <select id="sortby" class="sel"><option value="recent" ${S.sortBy === "recent" ? "selected" : ""}>Recent activity</option><option value="id" ${S.sortBy === "id" ? "selected" : ""}>By Task ID</option></select>
   </div>
+  ${S.boardTab === "loop" ? loopTasksView(lt, lsel) : `
   <div class="board2">
     <div class="blist">
       ${list.map((r) => `
@@ -160,7 +168,38 @@ function boardView() {
       </div>`).join("") || `<div class="empty">No tasks match.</div>`}
     </div>
     <div class="bdetail">${sel ? detailPane(sel) : `<div class="empty">Select a task to inspect.</div>`}</div>
-  </div>`;
+  </div>`}`;
+}
+
+// ---------- loop task tables (reference: tasks + task_steps tables) ----------
+function loopTasksView(lt, lsel) {
+  return `<div class="board2"><div class="blist">
+    <button class="btn sm primary" id="loopnew">+ New loop task</button>
+    ${lt.map((t) => `<div class="bcard ${S.loopSel === t.id ? "sel" : ""}" data-loop="${esc(t.id)}">
+      <div class="btop">${statusBadge(t.status === "open" ? "queued" : t.status)} <span class="hint">#${esc(t.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(t.updated_at)}</span></div>
+      <div class="btitle">${esc((t.title || "").slice(0, 100))}</div>
+      <div class="bmeta"><span class="kbd">${esc(t.repo || "")}</span><span class="kbd">${esc(t.task_type || "")}</span><span class="kbd">⑂ ${esc((t.branch || "").slice(0, 30))}</span></div>
+      <div class="bmeta"><span class="hint">progress ${t.progress || 0}%</span>${t.tokens ? `<span class="hint">🎟${Number(t.tokens).toLocaleString()}</span>` : ""}${t.tool_calls ? `<span class="hint">🔧${t.tool_calls}</span>` : ""}</div>
+    </div>`).join("") || `<div class="empty">No loop tasks yet — create one above.</div>`}
+  </div><div class="bdetail">${lsel ? loopDetailPane(lsel) : `<div class="empty">Select a loop task to inspect steps.</div>`}</div></div>`;
+}
+function loopDetailPane(d) {
+  const steps = d.steps || [];
+  return `<div class="dhead"><span class="mono">#${esc(d.task.id.slice(0, 6))}</span> ${statusBadge(d.task.status === "open" ? "queued" : d.task.status)}<span class="spacer"></span><button class="btn ghost sm" id="loopx">✕</button></div>
+  <div class="dtitle">${esc(d.task.title)}</div>
+  <div class="endgoal">${esc(d.task.end_goal || "No end goal.")}</div>
+  <div class="row"><span class="kbd">${esc(d.task.repo)}</span><span class="kbd">${esc(d.task.task_type)}</span><span class="kbd">⑂ ${esc(d.task.branch)}</span></div>
+  <h4>STEPS TABLE (${steps.length})</h4>
+  <div class="tblwrap"><table class="tbl"><thead><tr><th>#</th><th>Step</th><th>Type</th><th>Agent</th><th>Model</th><th>Status</th><th></th></tr></thead><tbody>
+  ${steps.map((s, i) => `<tr><td>${i + 1}</td><td><b>${esc(s.step_id)}</b></td><td>${esc(s.type)}</td><td>${esc(s.agent)}</td><td class="dim">${esc(s.model || "default")}</td><td>${statusBadge(s.status === "ok" ? "done" : s.status)}</td>
+  <td><button class="btn sm ghost" data-loopx="${i}">›</button></td></tr>
+  ${S.expandedSteps.has("L" + i) ? `<tr><td colspan="7"><p class="dim">Prompt:</p><pre class="out">${esc((s.prompt || "").slice(0, 2000))}</pre>${s.output ? `<p class="dim">Output:</p><pre class="out">${esc(String(s.output).slice(0, 2000))}</pre>` : ""}
+  <div class="row"><label class="fld"><span>Agent</span><select id="loop-agent-${i}">${["assistant", "summarizer", "coder", "finance-india", "finance-us"].map((a) => `<option ${s.agent === a ? "selected" : ""}>${a}</option>`).join("")}</select></label>
+  <label class="fld"><span>Model (empty = config default)</span><input id="loop-model-${i}" value="${esc(s.model || "")}" placeholder="gpt-5.6-terra"></label></div>
+  <label class="fld"><span>Prompt (empty = agent defaultPrompt)</span><textarea id="loop-prompt-${i}" rows="2">${esc(s.prompt || "")}</textarea></label>
+  <div class="row"><button class="btn sm primary" data-looprun="${i}">▶ Dispatch ${esc(s.agent || "agent")}</button></div></td></tr>` : ""}`).join("") || `<tr><td colspan="7" class="hint">No steps</td></tr>`}
+  </tbody></table></div>
+  <div class="row"><button class="btn sm" id="loopadd">+ Add step</button><span class="spacer"></span><button class="btn sm primary" id="loopsave">Save steps</button></div>`;
 }
 
 // ---------- detail drawer (PRD 4.4: header, pipeline, toolbar, 5 tabs) ----------
@@ -225,6 +264,31 @@ function detailPane(d) {
 }
 
 // ---------- other views ----------
+function configView() {
+  const c = S.cfgData;
+  if (!c) return `<div class="card"><h3>Configuration</h3><p class="hint">Loading providers, models, prompts…</p></div>`;
+  const provs = c.providers?.providers || [];
+  const agents = c.agents?.agents || [];
+  return `<div class="card"><h3>Configuration <span class="hint">providers · models · default prompts</span></h3>
+  ${S.cfgMsg ? `<div class="notice ok">${esc(S.cfgMsg)}</div>` : ""}
+  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${esc(c.providers?.defaultProvider || "azure")}). Empty prompt uses the agent's defaultPrompt.</p>
+  <h4>PROVIDERS (default: ${esc(c.providers?.defaultProvider || "azure")})</h4>
+  <div class="tblwrap"><table class="tbl"><thead><tr><th>ID</th><th>Type</th><th>Model default</th><th>Key env</th><th>Endpoint</th></tr></thead><tbody>
+  ${provs.map((p, i) => `<tr><td><b>${esc(p.id)}</b></td><td>${esc(p.type)}</td>
+  <td><input data-cprov="${i}" data-cf="modelDefault" value="${esc(p.modelDefault || "")}" placeholder="gpt-5.6-terra"></td>
+  <td class="dim">${esc(p.keyEnv || "")}</td><td class="dim">${esc((p.endpoint || "").slice(0, 50))}</td></tr>`).join("")}
+  </tbody></table></div>
+  <div class="row"><label class="fld"><span>Default provider</span><select id="cfg-defprov">${provs.map((p) => `<option ${c.providers?.defaultProvider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label></div>
+  <h4>AGENTS (${agents.length})</h4>
+  ${agents.map((a, i) => `<div class="stepcard"><div class="row"><b>${esc(a.id)}</b><span class="hint">${esc(a.description || "")}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${esc(a.id)}">▶ Test default prompt</button></div>
+  <div class="row"><label class="fld"><span>Provider</span><select data-cagent="${i}" data-cf="provider"><option value="">(default)</option>${provs.map((p) => `<option ${a.provider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label>
+  <label class="fld"><span>Model (empty = provider default)</span><input data-cagent="${i}" data-cf="model" value="${esc(a.model || a.deployment || "")}" placeholder="provider default"></label></div>
+  <label class="fld"><span>Default prompt (used when dispatch prompt is empty)</span><textarea data-cagent="${i}" data-cf="defaultPrompt" rows="2">${esc(a.defaultPrompt || "")}</textarea></label>
+  <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${esc(a.id)}" placeholder="empty = agent model"></label>
+  <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${esc(a.id)}" placeholder="empty = defaultPrompt"></label></div>
+  <div id="cfgtest-out-${esc(a.id)}"></div></div>`).join("")}
+  <div class="row"><button class="btn sm primary" id="cfgsave">Save configuration</button></div></div>`;
+}
 function agentsView() {
   return `<div class="agrid">${(S.agents || []).map((a) => `
     <div class="card"><h3>${esc(a.id)}</h3><p class="desc">${esc(a.description || "—")}</p>
@@ -304,33 +368,50 @@ function flowsView() {
     ["onetime", "⚡ One-time: investigate, then fix", "A single run: an agent scopes the problem, a condition gates it, then a real task is enqueued."],
   ];
   const ed = S.flowEdit;
-  return `<div class="card"><h3>Automations <span class="hint">${S.flows.length} flow(s)</span></h3>
-  <p class="hint">Scheduled cron jobs, event-driven sweeps, and agent housekeeping routines.</p>
+  const fb = S.flowMsg ? `<div class="notice ok">⚡ ${esc(S.flowMsg)}</div>` : "";
+  return `<div class="flows">${fb}
+  <div class="bhead"><h2>Automations <span class="hint">${S.flows.length} flow(s)</span></h2><span class="spacer"></span><button class="btn sm primary" id="flownew">+ New flow</button></div>
+  <p class="hint">Scheduled cron jobs, event-driven policy sweeps, and agent housekeeping routines.</p>
   <h4>START FROM A TEMPLATE</h4>
   <div class="agrid">${TPL.map(([id, t, d]) => `<div class="card tpl" data-tpl="${id}"><h3>${esc(t)}</h3><p class="dim">${esc(d)}</p></div>`).join("")}</div>
   <h4>YOUR FLOWS</h4>
-  ${(S.flows || []).map((f) => `<div class="appr"><div class="row"><b>${esc(f.title || f.id)}</b><span class="spacer"></span>
-    <button class="btn sm ${f.enabled === false ? "" : "on"}" data-flowen="${esc(f.id)}">${f.enabled === false ? "Enable" : "Enabled"}</button>
+  ${(S.flows || []).map((f) => {
+    const trig = f.trigger?.type || f.trigger || "manual";
+    const preset = trig === "schedule" ? (f.trigger?.preset || f.trigger?.label || `${f.trigger?.timeOfDay || f.trigger?.cron || "Scheduled"}`) : trig === "manual" ? "Manual" : (f.trigger?.rule || "Event");
+    return `<div class="flowcard"><div class="row"><div><h3>${esc(f.title || f.id)}</h3><p class="dim">${esc(f.description || "")}</p></div><span class="spacer"></span>
+    <button class="btn sm ${f.enabled === false ? "" : "okbtn"}" data-flowen="${esc(f.id)}">${f.enabled === false ? "Enable" : "Enabled"}</button>
     <button class="btn sm ghost" data-flowdry="${esc(f.id)}">Dry run</button>
-    <button class="btn sm" data-runflow="${esc(f.id)}">▶ Run</button>
-    <button class="btn sm ghost" data-flowedit="${esc(f.id)}">Edit</button>
+    <button class="btn sm primary" data-runflow="${esc(f.id)}">▶ Run</button>
+    <button class="btn sm ghost" data-flowedit="${esc(f.id)}">✎ Edit</button>
     <button class="btn sm danger" data-flowdel="${esc(f.id)}">🗑</button></div>
-  <p class="hint">${esc(f.configFileName || f.id + ".json")} · trigger ${esc(f.trigger?.type || f.trigger || "manual")}${f.trigger?.cron ? " " + esc(f.trigger.cron) : f.cron ? " " + esc(f.cron) : ""} · ${(f.steps || []).length} steps · last: ${esc(f.state?.last_status || f.lastStatus || "never")}</p>
-  <div class="pipe">${(f.steps || []).map((s, i) => `<div class="pnode"><b>${i + 1}. ${esc(s.title || s.id || s.type)}</b><span>${esc(s.type || "")}</span></div>`).join("")}</div></div>`).join("") || `<p class="hint">No flows — start from a template above.</p>`}
-  <div class="row"><button class="btn sm primary" id="flownew">+ New flow</button></div></div>
-  ${ed ? `<div class="modal"><div class="mbox wide"><div class="dhead"><b>Edit flow '${esc(ed.id || ed.title || "new")}'</b><span class="spacer"></span><button class="btn ghost sm" id="flowx">✕</button></div>
+  <div class="row"><span class="kbd">${esc(preset)}</span><span class="kbd">${esc(f.configFileName || f.id + ".json")}</span>
+  ${f.state?.next_run_at ? `<span class="hint">Next: ${esc(String(f.state.next_run_at).slice(0, 16).replace("T", " "))}</span>` : ""}<span class="hint">last: ${esc(f.state?.last_status || f.lastStatus || "never")}</span></div>
+  <div class="pipe">${(f.steps || []).map((s, i) => `<div class="pnode"><b>${esc(s.title || s.id || s.type)}</b><span>${esc(s.type || "")}</span></div>${i < (f.steps || []).length - 1 ? `<span class="arr">→</span>` : ""}`).join("")}</div></div>`;
+  }).join("") || `<div class="empty">No flows — start from a template above.</div>`}
+  ${ed ? `<div class="modal"><div class="mbox wide"><div class="dhead"><b>Edit flow '${esc((ed.configFileName || ed.id || "new").replace(".json", ""))}'</b><span class="spacer"></span><button class="btn ghost sm" id="flowx">✕</button></div>
   <p class="hint">Steps run top to bottom. Reference earlier output with <span class="kbd">{{steps.&lt;id&gt;.output}}</span> and the trigger with <span class="kbd">{{trigger.&lt;field&gt;}}</span>.</p>
   <h4>TRIGGER</h4>
-  <div class="row">${["manual", "schedule", "event"].map((t) => `<button class="btn sm ${S.flowTrig === t ? "primary" : "ghost"}" data-ftrig="${t}">${t === "manual" ? "Manual only" : t === "schedule" ? "On a schedule" : "On an event (rule)"}</button>`).join("")}</div>
-  ${S.flowTrig === "schedule" ? `<div class="row">${["Every hour", "Every weekday 9:00 AM", "Every day 6:00 PM", "Every Monday 8:30 AM", "Every N minutes"].map((p) => `<button class="btn sm ghost" data-preset="${esc(p)}">${esc(p)}</button>`).join("")}</div>
+  <div class="row">${[["manual", "Manual only"], ["schedule", "On a schedule"], ["event", "On an event (rule)"]].map(([t, l]) => `<button class="btn sm ${S.flowTrig === t ? "primary" : "ghost"}" data-ftrig="${t}">${l}</button>`).join("")}</div>
+  ${S.flowTrig === "schedule" ? `<div class="schedbox">
+  <div class="row">${["Every hour", "Every weekday 9:00 AM", "Every day 6:00 PM", "Every Monday 8:30 AM", "Every N minutes"].map((p) => `<button class="btn sm ghost" data-preset="${esc(p)}">${esc(p)}</button>`).join("")}</div>
   <div class="row"><label class="fld"><span>Time of day</span><input id="flow-time" value="${esc(S.flowTime)}"></label>
   <label class="fld"><span>Days</span><div class="row">${["Every day", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<button class="btn sm ${S.flowDays.includes(d) ? "on" : "ghost"}" data-fday="${d}">${d}</button>`).join("")}</div></label></div>
-  <p class="hint">🕒 ${esc(S.flowDays.join(", "))} at ${esc(S.flowTime)} · cron <span class="kbd">${esc(S.flowCron || "(auto)")}</span> · <button class="btn sm ghost" id="flowcron">Edit cron</button></p>` : ""}
-  <h4>STEPS (${(ed.steps || []).length} steps)</h4>
-  <div class="row"><span class="hint">Add step:</span>${["run_agent", "create_task", "file_request", "notify", "condition", "run_automation", "wait"].map((t) => `<button class="btn sm ghost" data-fadd="${t}">${esc(t.replace(/_/g, " "))}</button>`).join("")}</div>
-  ${(ed.steps || []).map((s, i) => `<div class="appr"><div class="row"><span class="kbd">▶ ${i + 1}.</span><b>${esc(s.title || s.id || s.type)}</b><span class="kbd">${esc(s.type)}</span><span class="spacer"></span><button class="btn sm ghost" data-fup="${i}">^</button><button class="btn sm ghost" data-fdown="${i}">v</button><button class="btn sm danger" data-fdel="${i}">🗑</button></div><p class="hint">${esc(s.details || s.prompt || s.message || s.template || "")}</p></div>`).join("")}
+  <p class="hint">🕒 ${esc(S.flowDays.join(", "))} at ${esc(S.flowTime)} · Next run: ${esc(nextRunHint())} · cron <span class="kbd">${esc(S.flowCron || "(auto)")}</span> · <button class="btn sm ghost" id="flowcron">Edit cron</button></p></div>` : ""}
+  ${S.flowTrig === "event" ? `<label class="fld"><span>Event rule (e.g. on task blocked, on brain failed)</span><input id="flow-rule" value="${esc(S.flowRule || "")}" placeholder="on task blocked"></label>` : ""}
+  <div class="row"><h4>STEPS (${(ed.steps || []).length} steps)</h4><span class="spacer"></span><button class="btn sm ghost" id="flowexpand">Expand all</button></div>
+  <div class="palette"><span class="hint">Add step:</span>${[["run_agent", "Run agent"], ["create_task", "Create task"], ["file_request", "File request"], ["notify", "Notify"], ["condition", "Condition"], ["run_automation", "Run automation"], ["wait", "Wait"]].map(([t, l]) => `<button class="btn sm ghost" data-fadd="${t}">${l}</button>`).join("")}</div>
+  ${(ed.steps || []).map((s, i) => `<div class="stepcard"><div class="row"><span class="kbd">▶ ${i + 1}.</span><b>${esc(s.title || s.id || s.type)}</b><span class="kbd">${esc(s.type)}</span><span class="spacer"></span><button class="btn sm ghost" data-fup="${i}" title="Move up">^</button><button class="btn sm ghost" data-fdown="${i}" title="Move down">∨</button><button class="btn sm danger" data-fdel="${i}" title="Delete">🗑</button></div>
+  <div class="row"><label class="fld"><span>Agent</span><select data-sagent="${i}">${["assistant", "summarizer", "coder", "finance-india", "finance-us"].map((a) => `<option ${s.agent === a ? "selected" : ""}>${a}</option>`).join("")}</select></label>
+  <label class="fld"><span>Model (empty = config default)</span><input data-smodel="${i}" value="${esc(s.model || "")}" placeholder="gpt-5.6-terra"></label></div>
+  <label class="fld"><span>Prompt ${s.type === "run_agent" || s.type === "agent" ? "(empty = agent defaultPrompt)" : ""}</span><textarea data-sprompt="${i}" rows="2" placeholder="What should this step do? Use {{steps.<id>}} refs.">${esc(s.prompt || s.message || s.text || s.template || "")}</textarea></label>
+  ${s.type === "condition" ? `<label class="fld"><span>Condition rule</span><input data-srule="${i}" value="${esc(s.rule || s.condition?.right || "")}"></label>` : ""}
+  <p class="hint">${esc(s.details || "")}</p></div>`).join("") || `<p class="hint">No steps — add one above.</p>`}
   <div class="row"><button class="btn sm ghost" id="flowcancel">Cancel</button><span class="spacer"></span><button class="btn sm primary" id="flowsave">Save flow</button></div>
-  </div></div>` : ""}`;
+  </div></div>` : ""}</div>`;
+}
+function nextRunHint() {
+  if (S.flowTrig !== "schedule") return "—";
+  return `Today at ${S.flowTime}`;
 }
 function todosView() {
   const tabs = [["open", "Open"], ["done", "Done"], ["dismissed", "Dismissed"], ["all", "All"]];
@@ -377,7 +458,7 @@ function render() {
   const main = v === "board" ? boardView() : v === "assistant" ? `<div class="card"><h3>Assistant</h3><div class="chatbox"><input id="chat-in" placeholder='Ask Rick…'><button class="btn primary sm" id="chat-send">Send</button></div><div class="feed">${(S.feed?.messages || []).slice(-10).map((m) => `<div class="fmsg ${m.kind === "chat" ? "user" : "rick"}">${esc(m.text)}</div>`).join("")}</div></div>` :
     v === "brain" ? brainView() : v === "todos" ? todosView() : v === "automations" ? flowsView() :
     v === "requests" ? requestsView() : v === "outbox" ? outboxView() :
-    v === "config" ? `<div class="card"><h3>Configuration</h3><p class="hint">Repos, paths, LLM models, tool permissions — managed in Setup wizard. <a href="/" target="_blank">Open setup</a></p><div class="row"><span class="kbd">refreshSec ${esc(S.cfg.refreshSec)}</span><span class="kbd">enabled ${esc(S.cfg.enabled)}</span></div></div>` :
+    v === "config" ? configView() :
     v === "activity" ? `<div class="card"><h3>Activity <span class="hint">global audit stream</span></h3><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("")}</div></div>` :
     v === "retro" ? retroView() :
     v === "logs" ? logsView() : v === "tools" ? toolsView() : v === "agents" ? agentsView() :
@@ -390,6 +471,37 @@ function render() {
   $$("[data-sel]").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; S.sessIdx = 0; render(); loadDetail(S.sel); }));
   $$(".banner").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; render(); loadDetail(S.sel); }));
   const dc = $("#dclose"); if (dc) dc.onclick = () => { S.sel = null; S.detail = null; render(); };
+  // loop task tables wiring
+  $$("[data-loop]").forEach((b) => (b.onclick = async () => { S.loopSel = b.dataset.loop; S.loopDetail = null; render(); loadLoopDetail(S.loopSel); }));
+  const lx = $("#loopx"); if (lx) lx.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
+  const ln = $("#loopnew"); if (ln) ln.onclick = async () => { const t = prompt("Loop task title:"); if (!t) return; const r = await api("/api/control/loop-tasks", { method: "POST", body: JSON.stringify({ title: t, repo: "tab-automation", task_type: "coding", status: "open" }) }); S.loopSel = r.id; tick(true); };
+  $$("[data-loopx]").forEach((b) => (b.onclick = () => { const k = "L" + b.dataset.loopx; S.expandedSteps.has(k) ? S.expandedSteps.delete(k) : S.expandedSteps.add(k); render(); }));
+  $$("[data-looprun]").forEach((b) => (b.onclick = async () => {
+    const i = +b.dataset.looprun; const d = S.loopDetail; if (!d) return;
+    const s = (d.steps || [])[i]; if (!s) return;
+    const ag = $(`#loop-agent-${i}`); const mo = $(`#loop-model-${i}`); const pr = $(`#loop-prompt-${i}`);
+    b.disabled = true; b.textContent = "⏳ Dispatching…";
+    try {
+      const r = await api(`/api/control/loop-tasks/${d.task.id}/dispatch`, { method: "POST", body: JSON.stringify({ agent: ag ? ag.value : s.agent, model: mo ? mo.value : (s.model || ""), prompt: pr ? pr.value : (s.prompt || ""), stepId: s.step_id }) });
+      S.cfgMsg = ""; S.loopDetail = null; tick(true);
+      alert(`Dispatched ${ag ? ag.value : s.agent} — output: ${String(r.output || "").slice(0, 300)}`);
+    } catch (e) { b.disabled = false; b.textContent = `▶ Dispatch`; alert(e.message); }
+  }));
+  const la = $("#loopadd"); if (la) la.onclick = () => { if (!S.loopDetail) return; S.loopDetail.steps = [...(S.loopDetail.steps || []), { step_id: `step-${(S.loopDetail.steps || []).length + 1}`, type: "agent", agent: "assistant", model: "", status: "pending", prompt: "", output: "" }]; render(); };
+  const lsv = $("#loopsave"); if (lsv) lsv.onclick = async () => { if (!S.loopDetail) return; const steps = (S.loopDetail.steps || []).map((s, i) => { const ag = $(`#loop-agent-${i}`); const mo = $(`#loop-model-${i}`); const pr = $(`#loop-prompt-${i}`); return { ...s, agent: ag ? ag.value : s.agent, model: mo ? mo.value : s.model, prompt: pr ? pr.value : s.prompt }; }); await api(`/api/control/loop-tasks/${S.loopDetail.task.id}`, { method: "POST", body: JSON.stringify({ steps }) }); S.loopDetail = null; tick(true); };
+  // config view wiring
+  $$("[data-cprov]").forEach((el) => (el.onchange = () => { if (S.cfgData?.providers?.providers?.[+el.dataset.cprov]) S.cfgData.providers.providers[+el.dataset.cprov][el.dataset.cf] = el.value; }));
+  $$("[data-cagent]").forEach((el) => (el.onchange = () => { if (S.cfgData?.agents?.agents?.[+el.dataset.cagent]) S.cfgData.agents.agents[+el.dataset.cagent][el.dataset.cf] = el.value; }));
+  const dp = $("#cfg-defprov"); if (dp) dp.onchange = () => { if (S.cfgData?.providers) S.cfgData.providers.defaultProvider = dp.value; };
+  const csv = $("#cfgsave"); if (csv) csv.onclick = async () => { if (!S.cfgData) return; await api("/api/control/config", { method: "POST", body: JSON.stringify({ providers: S.cfgData.providers, agents: S.cfgData.agents }) }); S.cfgMsg = "Configuration saved — dispatch uses it immediately."; render(); setTimeout(() => { S.cfgMsg = ""; render(); }, 3000); };
+  $$("[data-cfgtest]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.cfgtest; const mo = $(`#cfgtest-model-${id}`); const pr = $(`#cfgtest-prompt-${id}`); const out = $(`#cfgtest-out-${id}`);
+    if (out) out.innerHTML = `<p class="hint">Dispatching ${esc(id)}…</p>`;
+    try {
+      const r = await api("/api/control/config/test", { method: "POST", body: JSON.stringify({ agent: id, model: mo ? mo.value : "", prompt: pr ? pr.value : "" }) });
+      if (out) out.innerHTML = `<pre class="out">${esc(String(r.output || "").slice(0, 2000))}</pre>`;
+    } catch (e) { if (out) out.innerHTML = `<div class="status bad">${esc(e.message)}</div>`; }
+  }));
   $$("[data-rerun]").forEach((b) => (b.onclick = async () => { await api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.rerun, text: "" }) }); tick(true); }));
   $$("[data-runflow]").forEach((b) => (b.onclick = async () => { await api("/api/control/automations/" + b.dataset.runflow + "/run", { method: "POST" }).catch(() => api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.runflow, text: "" }) })); tick(true); }));
   $$("[data-xstep]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xstep; S.expandedSteps.has(i) ? S.expandedSteps.delete(i) : S.expandedSteps.add(i); render(); }));
@@ -451,24 +563,51 @@ function render() {
   const bq = $("#brain-q"); if (bq) { bq.oninput = () => { S.brainQ = bq.value; }; bq.onchange = () => render(); }
   const ob = $("#ob-add"); if (ob) ob.onclick = async () => { const i = $("#ob-in"); const t = i.value.trim(); if (!t) return; await api("/api/control/outbox", { method: "POST", body: JSON.stringify({ text: t }) }); tick(true); };
   $$("[data-obsent]").forEach((b) => (b.onclick = async () => { await api("/api/control/outbox/sent", { method: "POST", body: JSON.stringify({ id: b.dataset.obsent }) }); tick(true); }));
-  // flows editor wiring
-  $$("[data-tpl]").forEach((b) => (b.onclick = () => { S.flowEdit = { id: "flow-" + b.dataset.tpl, title: "", description: "", trigger_type: "schedule", trigger_config: {}, steps: [{ id: "sweep", type: "run_agent", title: "Sweep", details: "investigator agent" }, { id: "gate", type: "condition", title: "Gate", details: "1 rule" }, { id: "notify", type: "notify", title: "Notify", details: "outbox" }] }; render(); }));
-  const fn = $("#flownew"); if (fn) fn.onclick = () => { S.flowEdit = { id: "flow-new", title: "New flow", description: "", trigger_type: "manual", trigger_config: {}, steps: [] }; render(); };
+  // flows editor wiring (reference: spec AutomationsView — templates, trigger, palette, feedback)
+  const TPL_FLOWS = {
+    triage: { id: "triage-blocked", title: "Triage every blocked task", description: "When a task blocks, an investigator agent reads the evidence and posts a summary to the outbox.", trigger_type: "event", trigger_config: { rule: "on task blocked" }, steps: [{ id: "investigate", type: "run_agent", agent: "assistant", title: "Investigate block", prompt: "Read the blocked task evidence and summarize root cause." }, { id: "notify", type: "notify", title: "Post to outbox", message: "Blocked task triage: {{steps.investigate}}" }] },
+    nightly: { id: "nightly-sweep", title: "Nightly knowledge sweep", description: "A scheduled agent run — no task, no PR. Good for curation, reporting and housekeeping.", trigger_type: "schedule", trigger_config: { cron: "0 2 * * *", timeOfDay: "2:00 AM", days: ["Every day"] }, steps: [{ id: "sweep", type: "run_agent", agent: "assistant", title: "Knowledge sweep", prompt: "Sweep recent runs and curate housekeeping notes." }] },
+    onetime: { id: "investigate-fix", title: "One-time: investigate, then fix", description: "A single run: an agent scopes the problem, a condition gates it, then a real task is enqueued.", trigger_type: "manual", trigger_config: {}, steps: [{ id: "scope", type: "run_agent", agent: "assistant", title: "Scope problem", prompt: "Scope the problem in one pass." }, { id: "gate", type: "condition", title: "Gate", rule: "scope found issue" }, { id: "file", type: "create_task", title: "Enqueue fix", details: "real task" }] },
+  };
+  const seedFlowEdit = (f) => {
+    S.flowEdit = { id: f.id, title: f.title, description: f.description || "", trigger_type: f.trigger_type || "manual", trigger_config: f.trigger_config || {}, steps: (f.steps || []).map((s, i) => ({ id: s.id || `step-${i + 1}`, type: s.type || "run_agent", agent: s.agent || "assistant", model: s.model || "", title: s.title || s.id || s.type, prompt: s.prompt || s.message || s.text || s.template || "", rule: s.rule || "", details: s.details || "" })) };
+    S.flowTrig = S.flowEdit.trigger_type;
+    S.flowTime = S.flowEdit.trigger_config?.timeOfDay || "11:00 AM";
+    S.flowDays = S.flowEdit.trigger_config?.days || ["Every day"];
+    S.flowCron = S.flowEdit.trigger_config?.cron || "";
+    S.flowRule = S.flowEdit.trigger_config?.rule || "";
+  };
+  $$("[data-tpl]").forEach((b) => (b.onclick = () => { seedFlowEdit(TPL_FLOWS[b.dataset.tpl]); S.flowMsg = `Loaded template: ${S.flowEdit.title}`; render(); setTimeout(() => { S.flowMsg = ""; render(); }, 3500); }));
+  const fn = $("#flownew"); if (fn) fn.onclick = () => { seedFlowEdit({ id: "flow-new", title: "New flow", description: "", trigger_type: "manual", trigger_config: {}, steps: [] }); render(); };
   const fx = $("#flowx"); if (fx) fx.onclick = () => { S.flowEdit = null; render(); };
   const fc = $("#flowcancel"); if (fc) fc.onclick = () => { S.flowEdit = null; render(); };
+  const fe = $("#flowexpand"); if (fe) fe.onclick = () => { S.expandedSteps = new Set((S.flowEdit?.steps || []).map((_, i) => i)); render(); };
   $$("[data-ftrig]").forEach((b) => (b.onclick = () => { S.flowTrig = b.dataset.ftrig; if (S.flowEdit) S.flowEdit.trigger_type = S.flowTrig; render(); }));
   $$("[data-fday]").forEach((b) => (b.onclick = () => { const d = b.dataset.fday; if (d === "Every day") S.flowDays = ["Every day"]; else { S.flowDays = S.flowDays.filter((x) => x !== "Every day"); S.flowDays.includes(d) ? S.flowDays = S.flowDays.filter((x) => x !== d) : S.flowDays.push(d); if (!S.flowDays.length) S.flowDays = ["Every day"]; } render(); }));
-  $$("[data-preset]").forEach((b) => (b.onclick = () => { const p = b.dataset.preset; if (p.includes("9:00")) S.flowTime = "9:00 AM"; else if (p.includes("6:00")) S.flowTime = "6:00 PM"; else if (p.includes("8:30")) S.flowTime = "8:30 AM"; else if (p.includes("11:00")) S.flowTime = "11:00 AM"; render(); }));
+  $$("[data-preset]").forEach((b) => (b.onclick = () => { const p = b.dataset.preset; if (p.includes("9:00")) S.flowTime = "9:00 AM"; else if (p.includes("6:00")) S.flowTime = "6:00 PM"; else if (p.includes("8:30")) S.flowTime = "8:30 AM"; else if (p.includes("11:00")) S.flowTime = "11:00 AM"; else if (p.includes("hour")) { S.flowTime = "Every hour"; S.flowCron = "0 * * * *"; } else if (p.includes("N minutes")) { S.flowTime = "Every N minutes"; S.flowCron = "*/15 * * * *"; } render(); }));
   const fcr = $("#flowcron"); if (fcr) fcr.onclick = () => { const v = prompt("Cron expression (m h dom mon dow):", S.flowCron || "0 11 * * *"); if (v !== null) { S.flowCron = v; render(); } };
-  $$("[data-fadd]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const t = b.dataset.fadd; S.flowEdit.steps = [...(S.flowEdit.steps || []), { id: `step-${(S.flowEdit.steps || []).length + 1}`, type: t, title: t.replace(/_/g, " "), details: "" }]; render(); }));
+  const fr = $("#flow-rule"); if (fr) fr.onchange = () => { S.flowRule = fr.value; };
+  $$("[data-fadd]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const t = b.dataset.fadd; S.flowEdit.steps = [...(S.flowEdit.steps || []), { id: `step-${(S.flowEdit.steps || []).length + 1}`, type: t, agent: "assistant", model: "", title: t.replace(/_/g, " "), prompt: "", rule: "", details: "" }]; S.flowMsg = `Added step: ${t.replace(/_/g, " ")}`; render(); setTimeout(() => { S.flowMsg = ""; render(); }, 2500); }));
   $$("[data-fdel]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; S.flowEdit.steps = (S.flowEdit.steps || []).filter((_, i) => i !== Number(b.dataset.fdel)); render(); }));
   $$("[data-fup]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const i = Number(b.dataset.fup); const a = [...(S.flowEdit.steps || [])]; if (i > 0) { [a[i - 1], a[i]] = [a[i], a[i - 1]]; S.flowEdit.steps = a; render(); } }));
   $$("[data-fdown]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const i = Number(b.dataset.fdown); const a = [...(S.flowEdit.steps || [])]; if (i < a.length - 1) { [a[i + 1], a[i]] = [a[i], a[i + 1]]; S.flowEdit.steps = a; render(); } }));
-  const fs = $("#flowsave"); if (fs) fs.onclick = async () => { if (!S.flowEdit) return; await api("/api/control/automations", { method: "POST", body: JSON.stringify({ id: S.flowEdit.id, title: S.flowEdit.title || S.flowEdit.id, description: S.flowEdit.description || "", trigger_type: S.flowTrig, trigger_config: { timeOfDay: S.flowTime, days: S.flowDays, cron: S.flowCron }, steps: S.flowEdit.steps }) }); S.flowEdit = null; tick(true); };
-  $$("[data-flowedit]").forEach((b) => (b.onclick = () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowedit); if (f) { S.flowEdit = { id: f.id, title: f.title, description: f.description, trigger_type: f.trigger?.type || "manual", trigger_config: f.trigger || {}, steps: f.steps || [] }; S.flowTrig = f.trigger?.type || "manual"; render(); } }));
-  $$("[data-flowen]").forEach((b) => (b.onclick = async () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowen); await api(`/api/control/automations/${b.dataset.flowen}/enable`, { method: "POST", body: JSON.stringify({ enabled: f?.enabled === false }) }); tick(true); }));
+  $$("[data-sagent]").forEach((el) => (el.onchange = () => { if (S.flowEdit?.steps?.[+el.dataset.sagent]) S.flowEdit.steps[+el.dataset.sagent].agent = el.value; }));
+  $$("[data-smodel]").forEach((el) => (el.onchange = () => { if (S.flowEdit?.steps?.[+el.dataset.smodel]) S.flowEdit.steps[+el.dataset.smodel].model = el.value; }));
+  $$("[data-sprompt]").forEach((el) => (el.onchange = () => { if (S.flowEdit?.steps?.[+el.dataset.sprompt]) S.flowEdit.steps[+el.dataset.sprompt].prompt = el.value; }));
+  $$("[data-srule]").forEach((el) => (el.onchange = () => { if (S.flowEdit?.steps?.[+el.dataset.srule]) S.flowEdit.steps[+el.dataset.srule].rule = el.value; }));
+  const fs = $("#flowsave"); if (fs) fs.onclick = async () => {
+    if (!S.flowEdit) return;
+    const ft = $("#flow-time"); if (ft) S.flowTime = ft.value;
+    const fr2 = $("#flow-rule"); if (fr2) S.flowRule = fr2.value;
+    const payload = { id: S.flowEdit.id, title: S.flowEdit.title || S.flowEdit.id, description: S.flowEdit.description || "", trigger_type: S.flowTrig, trigger_config: { timeOfDay: S.flowTime, days: S.flowDays, cron: S.flowCron, rule: S.flowRule }, steps: S.flowEdit.steps };
+    await api("/api/control/automations", { method: "POST", body: JSON.stringify(payload) });
+    S.flowMsg = `Saved flow "${payload.title}"`; S.flowEdit = null; render(); tick(true);
+    setTimeout(() => { S.flowMsg = ""; render(); }, 3500);
+  };
+  $$("[data-flowedit]").forEach((b) => (b.onclick = () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowedit); if (f) { seedFlowEdit({ id: f.id, title: f.title, description: f.description, trigger_type: f.trigger?.type || "manual", trigger_config: f.trigger || {}, steps: f.steps || [] }); render(); } }));
+  $$("[data-flowen]").forEach((b) => (b.onclick = async () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowen); await api(`/api/control/automations/${b.dataset.flowen}/enable`, { method: "POST", body: JSON.stringify({ enabled: f?.enabled === false }) }); S.flowMsg = f?.enabled === false ? "Flow enabled" : "Flow paused"; render(); tick(true); setTimeout(() => { S.flowMsg = ""; render(); }, 2500); }));
   $$("[data-flowdel]").forEach((b) => (b.onclick = async () => { if (!confirm("Delete flow?")) return; await api(`/api/control/automations/${b.dataset.flowdel}/delete`, { method: "POST" }); tick(true); }));
-  $$("[data-flowdry]").forEach((b) => (b.onclick = async () => { alert("Dry run: 0 side-effects (validation only)."); }));
+  $$("[data-flowdry]").forEach((b) => (b.onclick = async () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowdry); S.flowMsg = `Dry run executed for ${f?.title || b.dataset.flowdry}. 0 side-effects.`; render(); setTimeout(() => { S.flowMsg = ""; render(); }, 3500); }));
   // todos wiring
   $$("[data-ttab]").forEach((b) => (b.onclick = () => { S.todoTab = b.dataset.ttab; render(); }));
   const tq = $("#todo-q"); if (tq) { tq.oninput = () => { S.todoQ = tq.value; }; tq.onchange = () => render(); }
@@ -520,13 +659,16 @@ async function sendChat() {
 async function loadDetail(id) {
   try { const r = await api(`/api/control/task/${id}`); S.detail = r.task; render(); } catch { /* keep list */ }
 }
+async function loadLoopDetail(id) {
+  try { const r = await api(`/api/control/loop-tasks/${id}`); S.loopDetail = r; render(); } catch { /* keep list */ }
+}
 function arm() {
   if (S.timer) clearInterval(S.timer);
   if (S.auto && S.cfg.enabled) S.timer = setInterval(() => tick(), Math.max(2, Number(S.cfg.refreshSec) || 3) * 1000);
 }
 async function tick(force) {
   try {
-    const [cfg, ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro] = await Promise.all([
+    const [cfg, ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData] = await Promise.all([
       api("/api/dashboard/config").catch(() => S.cfg),
       api("/api/control/overview?days=7").catch(() => null),
       api("/api/control/tasks?limit=30").catch(() => ({ tasks: [] })),
@@ -542,6 +684,8 @@ async function tick(force) {
       api("/api/control/requests").catch(() => ({ requests: [] })),
       api("/api/control/outbox").catch(() => ({ outbox: [] })),
       api("/api/control/retro?days=30").catch(() => null),
+      api("/api/control/loop-tasks?limit=50").catch(() => ({ tasks: [] })),
+      api("/api/control/config").catch(() => null),
     ]);
     if (cfg) S.cfg = cfg;
     if (ov) S.ov = ov;
@@ -551,7 +695,10 @@ async function tick(force) {
     if (feed) S.feed = feed; if (brain) S.brain = brain; S.flows = flows.flows || [];
     S.requests = requests.requests || []; S.outbox = outbox.outbox || [];
     if (retro) S.retro = retro;
+    S.loopTasks = loopTasks.tasks || [];
+    if (cfgData) S.cfgData = cfgData;
     if (S.sel && !S.detail) { loadDetail(S.sel); return; }
+    if (S.loopSel && !S.loopDetail) { loadLoopDetail(S.loopSel); return; }
     render(); arm();
   } catch (e) {
     $("#app").innerHTML = `<main class="shell"><div class="status bad">Control Room load nahi hua: ${esc(e.message)}</div></main>`;

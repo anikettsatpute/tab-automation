@@ -41,6 +41,16 @@ a { color: var(--acc); }
 .tpl { cursor: pointer; } .tpl:hover { border-color: var(--acc); }
 .pnode.run { border-color: var(--acc); }
 h4 { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); margin: 12px 0 6px; }
+/* automations (reference: spec AutomationsView — templates, flow cards, edit modal) */
+.flows { display: flex; flex-direction: column; gap: 4px; }
+.flowcard { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 8px 0; }
+.flowcard h3 { margin: 0 0 2px; font-size: 14px; }
+.flowcard .arr { color: var(--faint); font-weight: 800; }
+.schedbox { background: #0a0e15; border: 1px solid var(--line-soft); border-radius: 9px; padding: 10px 12px; margin: 8px 0; }
+.palette { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; background: #0a0e15; border: 1px solid var(--line-soft); border-radius: 9px; padding: 8px 10px; margin: 8px 0; }
+.notice { border-radius: 9px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 8px; }
+.notice.ok { background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.4); color: var(--ok); }
+.btn.okbtn { border-color: rgba(52,211,153,.55); color: var(--ok); background: var(--ok-soft); }
 /* light theme (PRD 4.1 theme toggle) */
 body[data-theme="light"] { --bg: #f4f6fb; --panel: #ffffff; --panel-2: #f1f4f9; --panel-3: #e6ebf3; --line: #d5dce8; --line-soft: #e3e8f1; --txt: #16202e; --dim: #4b5a70; --faint: #7b8aa0; --acc-soft: rgba(37,99,235,.1); }
 body[data-theme="light"] .top input, body[data-theme="light"] .chatbox input, body[data-theme="light"] .fld textarea, body[data-theme="light"] .fld select, body[data-theme="light"] .tbar select, body[data-theme="light"] .sel { background: #fff; }

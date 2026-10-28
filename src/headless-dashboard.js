@@ -11,10 +11,10 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { listRuns, getRun, getTaskDetail, pendingApprovals, decideApproval, controlOverview, controlRetro, listActivity, listLogs, listTodos, addTodo, completeTodo, dismissTodo, getTodo, addReminder, listReminders, writeLog, fileRequest, listRequests, linkRequestRun, queueOutbox, listOutbox, markOutboxSent, updateRunStatus, markTaskDone, blockTask, appendTask, deleteTask, requeueCount, addTaskComment, listTaskComments, recordAgentSession, listAgentSessions, fileBrainMessage, listBrainMessages, updateBrainMessage, brainMetrics, listAutomations, saveAutomation, deleteAutomation, setAutomationEnabled, markAutomationRun } from "./db.js";
+import { listRuns, getRun, getTaskDetail, pendingApprovals, decideApproval, controlOverview, controlRetro, listActivity, listLogs, listTodos, addTodo, completeTodo, dismissTodo, getTodo, addReminder, listReminders, writeLog, fileRequest, listRequests, linkRequestRun, queueOutbox, listOutbox, markOutboxSent, updateRunStatus, markTaskDone, blockTask, appendTask, deleteTask, requeueCount, addTaskComment, listTaskComments, recordAgentSession, listAgentSessions, fileBrainMessage, listBrainMessages, updateBrainMessage, brainMetrics, listAutomations, saveAutomation, deleteAutomation, setAutomationEnabled, markAutomationRun, createTask, listTasks, getTaskWithSteps, saveTaskSteps, updateTask, getConfig, setConfig, saveAutomationConfig, getAutomationConfig } from "./db.js";
 import { loadAll } from "./memory.js";
 import { getDashboardConfig } from "./dashboard-db.js";
-import { loadJson } from "./setup-api.js";
+import { loadJson, saveJson } from "./setup-api.js";
 
 const root = process.cwd();
 
@@ -92,6 +92,109 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
     ok: true, at: new Date().toISOString(), service: "headless",
     workflows: (cfg.workflows || []).length, agents: cfg.agents ? [...cfg.agents.keys()].length : 0,
   }));
+
+  // ---- configuration (reference: Configuration view — providers/models/prompts) ----
+  // Model selection lives here: agent.provider -> providers.json, agent.model override,
+  // per-call model override in dispatchAgent. Hot-reloads cfg in place.
+  app.get("/api/control/config", (c) => {
+    try {
+      return c.json({
+        ok: true,
+        providers: loadJson("config/providers.json", { defaultProvider: "azure", providers: [] }),
+        agents: loadJson("config/agents.json", { agents: [] }),
+        kv: { providerDefault: getConfig(root, "provider.default", ""), modelDefault: getConfig(root, "model.default", "") },
+      });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/config", async (c) => {
+    try {
+      const { providers, agents, kv } = await c.req.json().catch(() => ({}));
+      if (providers) {
+        const types = new Set(["azure-foundry", "openrouter", "meta"]);
+        for (const p of providers.providers ?? []) {
+          if (!p.id) return c.json({ error: "provider missing id" }, 400);
+          if (p.type && !types.has(p.type)) return c.json({ error: `provider ${p.id}: unknown type ${p.type}` }, 400);
+        }
+        saveJson("config/providers.json", providers);
+        cfg.providers = providers.providers ?? [];
+        cfg.defaultProvider = providers.defaultProvider || "azure";
+      }
+      if (agents) {
+        for (const a of agents.agents ?? []) {
+          if (!a.id || !a.systemPrompt) return c.json({ error: `agent missing id/systemPrompt` }, 400);
+          if (a.provider) {
+            const ids = new Set((cfg.providers ?? []).map((p) => p.id));
+            if (!ids.has(a.provider)) return c.json({ error: `agent ${a.id}: unknown provider ${a.provider}` }, 400);
+          }
+        }
+        saveJson("config/agents.json", agents);
+        cfg.agents = new Map((agents.agents ?? []).map((a) => [a.id, a]));
+      }
+      if (kv) for (const [k, v] of Object.entries(kv)) setConfig(root, k, String(v));
+      writeLog(root, { level: "info", source: "dashboard-config", message: "configuration updated" });
+      return c.json({ ok: true });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  // Test-dispatch one agent with its default prompt (reference: dispatchAgent).
+  app.post("/api/control/config/test", async (c) => {
+    try {
+      const { agent, model, prompt } = await c.req.json().catch(() => ({}));
+      if (!agent) return c.json({ error: "agent required" }, 400);
+      const { dispatchAgent } = await import("./agent.js");
+      const out = await dispatchAgent(cfg, { agent, model: model || "", prompt: prompt || "" });
+      return c.json({ ok: true, output: String(out).slice(0, 4000) });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
+  // ---- loop task tables (reference: PRD Task Board — tasks + task_steps) ----
+  app.get("/api/control/loop-tasks", (c) => {
+    try {
+      const status = c.req.query("status") || null;
+      const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+      return c.json({ ok: true, tasks: listTasks(root, { status, limit }) });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/loop-tasks", async (c) => {
+    try {
+      const b = await c.req.json().catch(() => ({}));
+      if (!b.title) return c.json({ error: "title required" }, 400);
+      const id = createTask(root, b);
+      if (Array.isArray(b.steps)) saveTaskSteps(root, id, b.steps);
+      return c.json({ ok: true, id });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.get("/api/control/loop-tasks/:id", (c) => {
+    try {
+      const d = getTaskWithSteps(root, c.req.param("id"));
+      if (!d) return c.json({ error: "not found" }, 404);
+      return c.json({ ok: true, ...d });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/loop-tasks/:id", async (c) => {
+    try {
+      const b = await c.req.json().catch(() => ({}));
+      const ok = updateTask(root, c.req.param("id"), b.task || {});
+      if (Array.isArray(b.steps)) saveTaskSteps(root, c.req.param("id"), b.steps);
+      return c.json({ ok });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  // Dispatch an agent for a loop task step (reference: dispatchAgent + model selection).
+  app.post("/api/control/loop-tasks/:id/dispatch", async (c) => {
+    try {
+      const { agent, model, prompt, stepId } = await c.req.json().catch(() => ({}));
+      if (!agent) return c.json({ error: "agent required" }, 400);
+      const { dispatchAgent } = await import("./agent.js");
+      const out = await dispatchAgent(cfg, { agent, model: model || "", prompt: prompt || "" });
+      const d = getTaskWithSteps(root, c.req.param("id"));
+      if (d) {
+        const steps = (d.steps || []).map((s) =>
+          s.step_id === stepId ? { ...s, output: String(out).slice(0, 8000), status: "done" } : s);
+        saveTaskSteps(root, c.req.param("id"), steps);
+      }
+      writeLog(root, { level: "info", source: "loop-dispatch", message: `task ${c.req.param("id")} step ${stepId || "?"} <- ${agent}/${model || "default"}`, runId: null });
+      return c.json({ ok: true, output: String(out).slice(0, 4000) });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
 
   // ---- control-plane APIs (reference: OrchestratorLoop task control plane) ----
   // Overview: header stats + charts (runs by day, by agent, top tools)

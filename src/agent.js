@@ -86,6 +86,25 @@ export async function agentCreateTool(cfg, agent, { need, testArgs }, opts = {})
 
 // Agentic chat: model may call web_fetch / web_search / web_news, results feed back in.
 // Falls back to plain chatCompletion behavior when the endpoint errors on tools.
+// dispatchAgent: loop-engine entry point. Model selection stays in configuration:
+// per-call `model` > agent.model/deployment (env: supported) > provider.modelDefault.
+// Empty prompt falls back to agent.defaultPrompt (config/agents.json).
+export async function dispatchAgent(cfg, { agent = "assistant", model = "", prompt = "", extraContext = "", toolCtx = {}, useTools = true } = {}) {
+  const base = cfg.agents.get(agent);
+  if (!base) throw new Error(`Unknown agent '${agent}'`);
+  const text = String(prompt ?? "").trim() || String(base.defaultPrompt ?? "").trim();
+  if (!text) throw new Error(`Empty prompt and no defaultPrompt for agent '${agent}'`);
+  const effective = model?.trim() ? { ...base, model: model.trim() } : base;
+  const effCfg = { ...cfg, agents: new Map(cfg.agents).set(agent, effective) };
+  if (!useTools) {
+    const resolved = resolveProvider(effCfg, effective);
+    return plainCall(effCfg, effective, [
+      { role: "system", content: base.systemPrompt },
+      { role: "user", content: text },
+    ], { resolved });
+  }
+  return chatWithTools(effCfg, agent, text, { extraContext, toolCtx });
+}
 export async function chatWithTools(cfg, agentId, userPrompt, { extraContext = "", toolCtx = {} } = {}) {
   const agent = cfg.agents.get(agentId);
   if (!agent) throw new Error(`Unknown agent '${agentId}'`);
@@ -160,10 +179,10 @@ export async function chatWithTools(cfg, agentId, userPrompt, { extraContext = "
   return plainCall(cfg, agent, messages) ?? "I ran out of tool steps — please narrow the question.";
 }
 
-async function plainCall(cfg, agent, messages) {
-  const resolved = resolveProvider(cfg, agent);
+async function plainCall(cfg, agent, messages, { resolved = null } = {}) {
+  const r = resolved || resolveProvider(cfg, agent);
   const slim = messages.filter((m) => m.role === "system" || m.role === "user");
-  const { url, headers, body } = buildChatRequest(resolved, agent, slim, { withTools: false });
+  const { url, headers, body } = buildChatRequest(r, agent, slim, { withTools: false });
   try {
     const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     if (!res.ok) return null;

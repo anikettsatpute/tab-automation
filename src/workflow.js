@@ -196,16 +196,22 @@ async function runStep(cfg, deps, step, ctx) {
       if (step.output === "json" && step.outputSchema) prompt += jsonPromptSuffix(step.outputSchema);
       const mem = step.memory === false ? "" : formatMemories(searchMemory(cfg.root, prompt, 4));
       const tAgent = Date.now();
-      const out = step.tools === false
-        ? await chatCompletion(cfg, step.agent, prompt)
-        : await chatWithTools(cfg, step.agent, prompt, { extraContext: mem, toolCtx: { runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "" } });
+      // Loop dispatch: model selection lives in configuration (agent.model >
+      // provider.modelDefault), empty prompt falls back to agent.defaultPrompt.
+      const { dispatchAgent } = await import("./agent.js");
+      const out = await dispatchAgent(cfg, {
+        agent: step.agent || "assistant", model: step.model || "",
+        prompt, extraContext: mem,
+        toolCtx: { runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "" },
+        useTools: step.tools !== false,
+      });
       // Session record (reference: PRD 4.4 Sessions tab + IMPLEMENTATION 2.2 agentSessions).
       try {
         const { recordAgentSession } = await import("./db.js");
         recordAgentSession(cfg.root, ctx._runId, {
           stepNumber: ctx._stepIdx ?? 0, sessionUuid: `${ctx._runId}-${step.id}`,
           runnerType: "tab-automation", agentRole: step.agent || "assistant",
-          model: cfg.agents?.get?.(step.agent)?.model || cfg.agents?.get?.(step.agent)?.deployment || "",
+          model: step.model || cfg.agents?.get?.(step.agent)?.model || cfg.agents?.get?.(step.agent)?.deployment || "",
           workspace: "tab-automation",
         });
       } catch {}

@@ -203,6 +203,53 @@ CREATE TABLE IF NOT EXISTS task_comments (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_comments_run ON task_comments(run_id);
+-- Loop tasks (reference: PRD Task Board — first-class task table) --
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  task_type TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  branch TEXT NOT NULL DEFAULT '',
+  end_goal TEXT NOT NULL DEFAULT '',
+  progress INTEGER NOT NULL DEFAULT 0,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  pr_url TEXT NOT NULL DEFAULT '',
+  comments INTEGER NOT NULL DEFAULT 0,
+  blocked_reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+-- Loop task steps (reference: PRD Steps tab — one row per pipeline step) --
+CREATE TABLE IF NOT EXISTS task_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  step_id TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT 'agent',
+  agent TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  prompt TEXT NOT NULL DEFAULT '',
+  output TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tsteps_task ON task_steps(task_id, position);
+-- Automation JSON configs (reference: Edit-flow modal round-trip blob) --
+CREATE TABLE IF NOT EXISTS automation_configs (
+  id TEXT PRIMARY KEY REFERENCES automations(id) ON DELETE CASCADE,
+  flow TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+-- Configuration KV (reference: Configuration view — providers/models/prompts) --
+CREATE TABLE IF NOT EXISTS configurations (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
 `;
 
 let _db = null;
@@ -249,6 +296,86 @@ export function closeDb() {
 }
 
 const now = () => new Date().toISOString();
+
+// ---- loop tasks (reference: PRD Task Board — first-class task table) ----
+export function createTask(root, { title, repo = "", task_type = "", status = "open", branch = "", end_goal = "" }) {
+  const db = openDb(root);
+  const id = randomUUID().slice(0, 8);
+  const t = now();
+  db.prepare(
+    "INSERT INTO tasks (id, title, repo, task_type, status, branch, end_goal, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)"
+  ).run(id, String(title || "").slice(0, 300), String(repo).slice(0, 120), String(task_type).slice(0, 60),
+    String(status).slice(0, 40), String(branch).slice(0, 200), String(end_goal).slice(0, 4000), t, t);
+  return id;
+}
+
+export function listTasks(root, { status = null, limit = 50 } = {}) {
+  const db = openDb(root);
+  if (status) return db.prepare("SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC LIMIT ?").all(status, limit);
+  return db.prepare("SELECT * FROM tasks ORDER BY updated_at DESC LIMIT ?").all(limit);
+}
+
+export function getTaskWithSteps(root, id) {
+  const db = openDb(root);
+  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+  if (!task) return null;
+  const steps = db.prepare("SELECT * FROM task_steps WHERE task_id = ? ORDER BY position").all(id);
+  return { task, steps };
+}
+
+export function saveTaskSteps(root, taskId, steps = []) {
+  const db = openDb(root);
+  db.prepare("DELETE FROM task_steps WHERE task_id = ?").run(taskId);
+  const ins = db.prepare(
+    "INSERT INTO task_steps (task_id, position, step_id, type, agent, model, status, prompt, output, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+  steps.slice(0, 50).forEach((s, i) => {
+    ins.run(taskId, i, String(s.step_id || s.id || `step-${i + 1}`).slice(0, 120),
+      String(s.type || "agent").slice(0, 40), String(s.agent || "").slice(0, 80),
+      String(s.model || "").slice(0, 80), String(s.status || "pending").slice(0, 40),
+      String(s.prompt || "").slice(0, 8000), String(s.output || "").slice(0, 8000), now());
+  });
+  db.prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").run(now(), taskId);
+}
+
+export function updateTask(root, id, patch = {}) {
+  const allowed = ["title", "repo", "task_type", "status", "branch", "end_goal", "progress", "tokens", "cost", "tool_calls", "pr_url", "comments", "blocked_reason"];
+  const sets = [];
+  const args = [];
+  for (const k of allowed) {
+    if (patch[k] !== undefined) { sets.push(`${k} = ?`); args.push(patch[k]); }
+  }
+  if (!sets.length) return false;
+  sets.push("updated_at = ?");
+  args.push(now(), id);
+  const r = openDb(root).prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  return r.changes > 0;
+}
+
+// ---- configurations (reference: Configuration view KV) ----
+export function getConfig(root, key, fallback = "") {
+  const row = openDb(root).prepare("SELECT value FROM configurations WHERE key = ?").get(key);
+  return row ? row.value : fallback;
+}
+
+export function setConfig(root, key, value) {
+  openDb(root).prepare(
+    "INSERT INTO configurations (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+  ).run(String(key), String(value ?? ""), now());
+}
+
+// ---- automation JSON configs (reference: Edit-flow modal blob) ----
+export function saveAutomationConfig(root, id, flowObj) {
+  openDb(root).prepare(
+    "INSERT INTO automation_configs (id, flow, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET flow = excluded.flow, updated_at = excluded.updated_at"
+  ).run(String(id), JSON.stringify(flowObj || {}).slice(0, 30000), now());
+}
+
+export function getAutomationConfig(root, id) {
+  const row = openDb(root).prepare("SELECT flow FROM automation_configs WHERE id = ?").get(id);
+  if (!row) return null;
+  try { return JSON.parse(row.flow); } catch { return null; }
+}
 
 // ---- runs ----
 export function createRun(root, { workflowId, kind = "manual", trigger = {} }) {
