@@ -27,7 +27,10 @@
       "agents": [
         "scout",
         "summarizer",
-        "assistant"
+        "assistant",
+        "analyst",
+        "critic",
+        "writer"
       ]
     }
   ],
@@ -89,6 +92,29 @@
       "agents": [
         "scout",
         "coder",
+        "assistant"
+      ]
+    },
+    {
+      "id": "deep-research",
+      "name": "Deep research",
+      "description": "Scout gathers, analyst verdicts, critic red-teams, writer publishes. Quality-gated.",
+      "stream": "research",
+      "agents": [
+        "scout",
+        "analyst",
+        "critic",
+        "writer"
+      ]
+    },
+    {
+      "id": "ship-review",
+      "name": "Ship review",
+      "description": "Coder drafts, critic gates SHIP/REWORK, assistant summarizes.",
+      "stream": "general",
+      "agents": [
+        "coder",
+        "critic",
         "assistant"
       ]
     }

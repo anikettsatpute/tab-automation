@@ -158,9 +158,19 @@ function collectTaskItems(step, ctx) {
 }
 
 async function runSteps(cfg, deps, steps, ctx) {
+  // Live progress: total up front so the dashboard shows 0/N immediately.
+  try {
+    const { bumpRunProgress } = await import("./db.js");
+    bumpRunProgress(cfg.root, ctx._runId, { total: steps.length, done: 0, title: ctx.trigger?.text || ctx.workflow });
+  } catch {}
   for (let i = 0; i < steps.length; i++) {
     ctx._stepIdx = i;
     await runStep(cfg, deps, steps[i], ctx);
+    // Live progress: bump done count after each step so the board moves.
+    try {
+      const { bumpRunProgress } = await import("./db.js");
+      bumpRunProgress(cfg.root, ctx._runId, { done: i + 1 });
+    } catch {}
   }
 }
 
@@ -245,17 +255,26 @@ async function runStep(cfg, deps, step, ctx) {
       let stored = patch?.output ?? out;
       let outputJson = patch || null;
       if (step.output === "json") {
-        const parsed = parseJsonOutput(patch?.output ?? out, step.outputSchema);
-        if (parsed.ok) {
-          stored = parsed.value;
-          outputJson = parsed.value;
+        // Session patch is already structured JSON — use it directly.
+        // Only re-parse when the step explicitly needs outputSchema coercion
+        // AND the patch lacks those fields (legacy text-mode steps).
+        const needsCoerce = step.outputSchema && !Object.keys(step.outputSchema).every((k) => patch && patch[k] !== undefined && k !== "output" && k !== "summary");
+        if (!needsCoerce && patch) {
+          stored = patch;
+          outputJson = patch;
         } else {
-          stored = { _raw: out, _parseError: parsed.error };
-          outputJson = stored;
-          persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: stored, agent: step.agent });
-          if (step.saveAs) ctx.steps[step.saveAs] = stored;
-          ctx.steps[step.id] = stored;
-          throw new Error(`Step ${step.id}: agent did not return valid JSON (${parsed.error})`);
+          const parsed = parseJsonOutput(patch?.output ?? out, step.outputSchema);
+          if (parsed.ok) {
+            stored = parsed.value;
+            outputJson = parsed.value;
+          } else {
+            stored = { _raw: out, _parseError: parsed.error };
+            outputJson = stored;
+            persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: stored, agent: step.agent });
+            if (step.saveAs) ctx.steps[step.saveAs] = stored;
+            ctx.steps[step.id] = stored;
+            throw new Error(`Step ${step.id}: agent did not return valid JSON (${parsed.error})`);
+          }
         }
       }
       if (step.saveAs) ctx.steps[step.saveAs] = stored;

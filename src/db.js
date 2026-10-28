@@ -628,6 +628,17 @@ export function bumpRunStats(root, runId, { tokens = 0, cost = 0, toolCalls = 0,
   } catch { /* best effort */ }
 }
 
+/** Live progress: total steps + completed count. Dashboard polls this every few seconds. */
+export function bumpRunProgress(root, runId, { total = null, done = null, title = null } = {}) {
+  if (!runId) return;
+  try {
+    const db = openDb(root);
+    if (total !== null) db.prepare("UPDATE runs SET progress_total = ? WHERE id = ?").run(total, runId);
+    if (done !== null) db.prepare("UPDATE runs SET progress_done = ? WHERE id = ?").run(done, runId);
+    if (title) db.prepare("UPDATE runs SET title = COALESCE(title, ?) WHERE id = ?").run(String(title).slice(0, 300), runId);
+  } catch { /* best effort */ }
+}
+
 // ---- automations (reference: YOUR FLOWS cards + Edit-flow modal) ----
 // trigger_type: manual|schedule|event ; trigger_config JSON: {cron, timeOfDay, days, eventRule}
 export function listAutomations(root) {

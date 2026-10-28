@@ -79,6 +79,22 @@ export async function classifyTask(cfg, text) {
   }
 }
 
+/** Generic-prompt router: plain-English task types map to real automations.
+ *  "research X" -> deep-research, "review this" -> ship-it, "brief me" -> finance.
+ *  Returns a workflow id or null. No LLM — deterministic keyword match. */
+export function routeGenericPrompt(cfg, text) {
+  const t = String(text || "").toLowerCase();
+  const has = (...ws) => ws.some((w) => t.includes(w));
+  if (has("deep research", "research this", "research the", "investigate this", "look into")) return "deep-research";
+  if (has("ship it", "ship this", "review this", "red team", "red-team", "code review")) return "ship-it";
+  if (has("scout this", "scout the", "find out about", "dig into")) return "scout-test";
+  if (has("brief me", "morning brief", "market brief", "premarket", "pre-market")) {
+    return has("us", "nasdaq", "nyse", "s&p") ? "premarket-us" : "premarket-india";
+  }
+  if (has("summarize this", "tl;dr", "tldr this")) return null; // single-agent fast path handles it
+  return null;
+}
+
 /** Build a pipeline workflow doc from the planner agent.
  *  The planner sees the REAL workflow/agent/tool catalogs so it reuses
  *  existing automations instead of inventing new ones. */
@@ -135,6 +151,23 @@ export async function handleRickMessage(cfg, deps, msg, text) {
 
   // 0b) "run it" / explicit workflow mention -> run the REAL workflow, never a hallucinated pipeline
   const targetId = resolveRunTarget(cfg, text, channelHistory);
+  // 0b2) generic task-type prompts ("research X", "review this", "brief me") -> route to flows
+  const genericId = routeGenericPrompt(cfg, text);
+  if (genericId && !targetId) {
+    const wf = (cfg.workflows ?? []).find((w) => w.id === genericId);
+    if (wf) {
+      saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
+      await msg.channel.sendTyping().catch(() => {});
+      await msg.reply(`▶️ Got it — running **${wf.id}** (${wf.name})… watch the dashboard Runs tab move.`);
+      const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+      const ctx = await deps.runWorkflow(wf, {
+        kind: "discord", command: wf.trigger?.command || wf.id,
+        text, user: msg.author.tag, channelId: msg.channelId,
+      }, msg.channelId, replyTo);
+      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Ran workflow ${wf.id}: ${Object.keys(ctx.steps).join(", ")}`.slice(0, 500), channelId: msg.channelId });
+      return { kind: "workflow", pipeline: wf.id, steps: Object.keys(ctx.steps) };
+    }
+  }
   if (targetId) {
     const wf = (cfg.workflows ?? []).find((w) => w.id === targetId);
     if (wf) {

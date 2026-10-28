@@ -239,6 +239,128 @@
           "message": "🔍 Scout report:\n\n{{steps.brief}}"
         }
       ]
+    },
+    {
+      "id": "deep-research",
+      "name": "Deep research pipeline",
+      "description": "Scout -> analyst -> critic gate -> writer publish. Discord: !research <topic>.",
+      "trigger": {
+        "type": "discord",
+        "command": "research"
+      },
+      "steps": [
+        {
+          "id": "gather",
+          "type": "agent",
+          "agent": "scout",
+          "prompt": "Research this topic with web_search (2+ queries) + web_fetch (2+ pages). Return evidence pack:\n\n{{trigger.text}}",
+          "saveAs": "evidence"
+        },
+        {
+          "id": "analyze",
+          "type": "agent",
+          "agent": "analyst",
+          "prompt": "Analyze this evidence pack. Verdict + findings with sources + risks + recommendation:\n\n{{steps.gather}}",
+          "saveAs": "analysis"
+        },
+        {
+          "id": "redteam",
+          "type": "agent",
+          "agent": "critic",
+          "prompt": "Red-team this analysis. SHIP or REWORK + holes + top fix:\n\n{{steps.analyze}}",
+          "saveAs": "review"
+        },
+        {
+          "id": "gate",
+          "type": "condition",
+          "condition": {
+            "left": "{{steps.redteam}}",
+            "operator": "contains",
+            "right": "SHIP"
+          },
+          "then": [
+            {
+              "id": "publish",
+              "type": "agent",
+              "agent": "writer",
+              "prompt": "Turn this analysis into a Discord post (headline + 3-5 bullets + CTA):\n\n{{steps.analyze}}",
+              "saveAs": "post"
+            },
+            {
+              "id": "send",
+              "type": "discord_send",
+              "message": "🔬 Deep research:\n\n{{steps.publish}}"
+            }
+          ],
+          "else": [
+            {
+              "id": "rework-note",
+              "type": "discord_send",
+              "message": "🛑 Critic says REWORK ({{steps.redteam.holes}} holes). Top fix: review needed.\n\nAnalysis held for human review — check dashboard Runs for details."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ship-it",
+      "name": "Ship review pipeline",
+      "description": "Coder drafts, critic gates SHIP/REWORK, assistant summarizes. Discord: !ship <diff-or-idea>.",
+      "trigger": {
+        "type": "discord",
+        "command": "ship"
+      },
+      "steps": [
+        {
+          "id": "draft",
+          "type": "agent",
+          "agent": "coder",
+          "prompt": "Review this and propose findings + minimal diff:\n\n{{trigger.text}}",
+          "saveAs": "draft"
+        },
+        {
+          "id": "gate",
+          "type": "agent",
+          "agent": "critic",
+          "prompt": "Red-team this draft. SHIP or REWORK + holes + top fix:\n\n{{steps.draft}}",
+          "saveAs": "review",
+          "condition": {
+            "left": "{{steps.redteam}}",
+            "operator": "contains",
+            "right": "SHIP"
+          }
+        },
+        {
+          "id": "decide",
+          "type": "condition",
+          "condition": {
+            "left": "{{steps.gate}}",
+            "operator": "contains",
+            "right": "SHIP"
+          },
+          "then": [
+            {
+              "id": "summarize",
+              "type": "agent",
+              "agent": "assistant",
+              "prompt": "Summarize this SHIP-approved draft for Discord (short, punchy):\n\n{{steps.draft}}",
+              "saveAs": "summary"
+            },
+            {
+              "id": "send",
+              "type": "discord_send",
+              "message": "✅ SHIP IT:\n\n{{steps.summarize}}"
+            }
+          ],
+          "else": [
+            {
+              "id": "hold",
+              "type": "discord_send",
+              "message": "🛑 REWORK needed ({{steps.gate.holes}} holes). Draft held — check dashboard Runs."
+            }
+          ]
+        }
+      ]
     }
   ]
 }

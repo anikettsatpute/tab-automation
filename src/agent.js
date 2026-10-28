@@ -102,21 +102,27 @@ export async function dispatchAgent(cfg, { agent = "assistant", model = "", prom
   const effective = model?.trim() ? { ...base, model: model.trim() } : base;
   const effCfg = { ...cfg, agents: new Map(cfg.agents).set(agent, effective) };
   // Wrap the prompt so the session returns reconciliable JSON.
+  // Force JSON mode on the call so long system prompts can't override the contract.
+  // When jsonContract is on, the system prompt IS the contract — agent prose can't win.
   const { sessionPrompt } = await import("./orchestrator.js");
-  const finalPrompt = jsonContract
-    ? `${text}\n\n---\n${sessionPrompt({ agent, taskTitle: toolCtx.taskTitle || "", stepGoal: toolCtx.stepGoal || "", context: extraContext })}`
-    : (extraContext ? `${text}\n\nContext:\n${extraContext}` : text);
+  const contractText = sessionPrompt({ agent, taskTitle: toolCtx.taskTitle || "", stepGoal: toolCtx.stepGoal || "", context: extraContext });
+  const finalPrompt = jsonContract ? `${text}\n\n---\n${contractText}` : (extraContext ? `${text}\n\nContext:\n${extraContext}` : text);
+  const sysPrompt = jsonContract
+    ? `You are the '${agent}' agent in a task loop. You MUST respond with ONLY valid JSON matching this shape, no other text, no markdown, no code fences: {"status": "done|failed|blocked", "summary": "one-line what happened", "output": "main result text", "next": "suggested next agent id or empty", "updates": {"progress": 0, "tokens": 0}}. Do the work described by the user, then put your result in the output field.`
+    : base.systemPrompt;
+  const effJson = jsonContract ? { ...effective, systemPrompt: sysPrompt, output: "json" } : effective;
+  const effCfgJson = { ...effCfg, agents: new Map(effCfg.agents).set(agent, effJson) };
   const sessionId = `${toolCtx.runId || "adhoc"}:${agent}:${Date.now().toString(36)}`;
   const t0 = Date.now();
   let raw;
   if (!useTools) {
-    const resolved = resolveProvider(effCfg, effective);
-    raw = await plainCall(effCfg, effective, [
-      { role: "system", content: base.systemPrompt },
+    const resolved = resolveProvider(effCfgJson, effJson);
+    raw = await plainCall(effCfgJson, effJson, [
+      { role: "system", content: base.systemPrompt + "\n\n" + contractText },
       { role: "user", content: finalPrompt },
     ], { resolved });
   } else {
-    raw = await chatWithTools(effCfg, agent, finalPrompt, { extraContext: "", toolCtx });
+    raw = await chatWithTools(effCfgJson, agent, finalPrompt, { extraContext: "", toolCtx });
   }
   // Reconcile: parse session JSON -> DB patch. Raw text preserved for audit.
   const { reconcileSessionJson } = await import("./orchestrator.js");
