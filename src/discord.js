@@ -6,6 +6,15 @@ import { handleRickMessage, workflowCatalog } from "./planner.js";
 import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutbox } from "./db.js";
 
 export function startDiscord(cfg, deps) {
+  // Redelivery guard: one Discord message id = one handling. Discord.js can
+  // emit the same message twice (reconnect/resume); without this, one user
+  // goal spawns a task AND a stray pipeline run.
+  // Two layers: (1) exact msg.id dedupe, (2) same-author+same-text within
+  // 90s dedupe — covers redeliveries that arrive with a fresh id.
+  const seenMessages = new Set();
+  const recentTexts = new Map(); // key author|channel|textHash -> epoch ms
+  const MAX_SEEN = 500;
+  const DUP_WINDOW_MS = 90000;
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -23,8 +32,26 @@ export function startDiscord(cfg, deps) {
   client.on(Events.MessageCreate, async (msg) => {
     try {
       if (msg.author.bot) return;
+      if (msg.id && seenMessages.has(msg.id)) return;
+      if (msg.id) {
+        seenMessages.add(msg.id);
+        if (seenMessages.size > MAX_SEEN) seenMessages.delete(seenMessages.values().next().value);
+      }
       const text = (msg.content ?? "").trim();
       if (!text) return;
+      // Same author + same text within 90s = redelivery with a fresh id. Skip.
+      // (Prevents the "task queued" + stray "Plan" double-run for one goal.)
+      try {
+        const key = `${msg.author?.id || "?"}|${msg.channelId}|${text.length}|${text.slice(0, 120)}`;
+        const nowMs = Date.now();
+        const prev = recentTexts.get(key);
+        if (prev && nowMs - prev < DUP_WINDOW_MS) {
+          deps.log?.(`[discord] duplicate delivery skipped (${msg.id})`);
+          return;
+        }
+        recentTexts.set(key, nowMs);
+        if (recentTexts.size > MAX_SEEN) recentTexts.delete(recentTexts.keys().next().value);
+      } catch { /* never block handling on the guard */ }
 
       // 1) !command workflows (e.g. !review <text>)
       if (text.startsWith("!")) {

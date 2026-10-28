@@ -90,16 +90,23 @@ export async function agentCreateTool(cfg, agent, { need, testArgs }, opts = {})
 // per-call `model` > agent.model/deployment (env: supported) > provider.modelDefault.
 // Empty prompt falls back to agent.defaultPrompt (config/agents.json).
 //
-// Muse session model: every step/automation-step spawns ONE session as the agent
-// dispatcher. The session writes JSON (SESSION_JSON_CONTRACT); our loop code
-// reconciles that JSON into the DB (tasks/task_steps/runs). The session never
-// writes the DB directly.
+// Muse session model: every step/automation-step spawns ONE `muse exec` session
+// as the agent dispatcher. The session writes JSON (SESSION_JSON_CONTRACT) to
+// stdout AND to data/responses/<runId>/step<N>.json; our loop code reconciles
+// that JSON into the DB (tasks/task_steps/runs). The session never writes the
+// DB directly. Provider "muse" (default) uses the Muse CLI + MUSE_KEY;
+// other providers (azure/openrouter/meta) keep the HTTP chat path.
 export async function dispatchAgent(cfg, { agent = "assistant", model = "", prompt = "", extraContext = "", toolCtx = {}, useTools = true, jsonContract = true } = {}) {
   const base = cfg.agents.get(agent);
   if (!base) throw new Error(`Unknown agent '${agent}'`);
   const text = String(prompt ?? "").trim() || String(base.defaultPrompt ?? "").trim();
   if (!text) throw new Error(`Empty prompt and no defaultPrompt for agent '${agent}'`);
   const effective = model?.trim() ? { ...base, model: model.trim() } : base;
+  const resolved = resolveProvider({ ...cfg, agents: new Map(cfg.agents).set(agent, effective) }, effective);
+  // Muse CLI path (default provider): headless `muse exec` session per step.
+  if (resolved.type === "muse") {
+    return dispatchViaMuse(cfg, { agent, base: effective, model: resolved.model, prompt: text, extraContext, toolCtx, jsonContract });
+  }
   const effCfg = { ...cfg, agents: new Map(cfg.agents).set(agent, effective) };
   // Wrap the prompt so the session returns reconciliable JSON.
   // Force JSON mode on the call so long system prompts can't override the contract.
@@ -116,7 +123,6 @@ export async function dispatchAgent(cfg, { agent = "assistant", model = "", prom
   const t0 = Date.now();
   let raw;
   if (!useTools) {
-    const resolved = resolveProvider(effCfgJson, effJson);
     raw = await plainCall(effCfgJson, effJson, [
       { role: "system", content: base.systemPrompt + "\n\n" + contractText },
       { role: "user", content: finalPrompt },
@@ -136,6 +142,98 @@ export async function dispatchAgent(cfg, { agent = "assistant", model = "", prom
     });
   } catch {}
   return { sessionId, agent, model: effective.model || "", raw, ...rec };
+}
+
+// Muse CLI dispatch: one headless `muse exec` session per step.
+// Writes the session JSON to data/responses/<runId>/step<N>.json (step1.json
+// style) + reconciles it into a DB patch via reconcileSessionJson.
+// Model: resolved muse model id (default muse-spark-1.3 contributor).
+async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext = "", toolCtx = {}, jsonContract = true }) {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const { reconcileSessionJson, sessionPrompt } = await import("./orchestrator.js");
+  const { MUSE_DEFAULT_MODEL } = await import("./providers.js");
+  const museModel = (model || MUSE_DEFAULT_MODEL).trim() || MUSE_DEFAULT_MODEL;
+  const runId = toolCtx.runId || "adhoc";
+  const stepIdx = Number(toolCtx.stepIdx ?? toolCtx.stepNumber ?? 0) || 0;
+  const sessionId = `${runId}:${agent}:${Date.now().toString(36)}`;
+  const t0 = Date.now();
+  // Step files: data/responses/<runId>/step<N>.json (+ .prompt.md for audit).
+  const dir = `${cfg.root}/data/responses/${runId}`;
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  const stepFile = `${dir}/step${stepIdx + 1}.json`;
+  const promptFile = `${dir}/step${stepIdx + 1}.prompt.md`;
+  const contractText = sessionPrompt({ agent, taskTitle: toolCtx.taskTitle || "", stepGoal: toolCtx.stepGoal || "", context: extraContext });
+  const finalPrompt = jsonContract
+    ? `${base.systemPrompt || ""}\n\n---\nTask: ${prompt}\n${extraContext ? `\nContext:\n${String(extraContext).slice(0, 3000)}\n` : ""}\n---\n${contractText}`
+    : `${base.systemPrompt || ""}\n\nTask: ${prompt}${extraContext ? `\n\nContext:\n${extraContext}` : ""}`;
+  try { writeFileSync(promptFile, finalPrompt.slice(0, 20000)); } catch {}
+  // Headless session: prompt via --prompt-file (avoids shell-quoting issues),
+  // JSON answer parsed from stdout. Session id links the CLI log to our run.
+  const promptTmp = `${dir}/step${stepIdx + 1}.input.txt`;
+  try { writeFileSync(promptTmp, finalPrompt.slice(0, 30000)); } catch {}
+  const { randomUUID } = await import("node:crypto");
+  const cliSession = randomUUID();
+  const args = [
+    "exec", "--provider", "meta", "--model", museModel, "--contributor-mode", "on",
+    "--approval-mode", "never", "--disable-sandbox",
+    "--session-id", cliSession,
+    "--prompt-file", promptTmp,
+  ];
+  const env = { ...process.env };
+  // MUSE_KEY from .env authenticates the CLI (meta provider).
+  if (!env.MUSE_KEY && cfg.museKey) env.MUSE_KEY = cfg.museKey;
+  let raw = "", stderr = "", status = 0;
+  try {
+    const r = spawnSync("muse", args, { encoding: "utf-8", env, timeout: 300000, maxBuffer: 8 * 1024 * 1024, cwd: cfg.root });
+    raw = String(r.stdout || "");
+    stderr = String(r.stderr || "");
+    status = Number(r.status ?? (r.error ? 1 : 0));
+    if (r.error) throw r.error;
+  } catch (err) {
+    const rec0 = { ok: false, error: `muse exec failed: ${String(err.message || err).slice(0, 300)}`, patch: null };
+    try {
+      const { recordActivity } = await import("./db.js");
+      recordActivity(cfg.root, { runId: toolCtx.runId || null, kind: "session", actor: agent, action: `session:${sessionId}`, detail: `muse model=${museModel} failed: ${rec0.error}`, durationMs: Date.now() - t0, status: "failed" });
+    } catch {}
+    return { sessionId, agent, model: museModel, raw: "", error: rec0.error, ...rec0, stepFile };
+  }
+  // Muse prints log lines to stderr; JSON answer is the last {...} block on stdout.
+  let jsonText = raw.trim();
+  const lastBrace = jsonText.lastIndexOf("{");
+  if (jsonText.startsWith("muse:") || !jsonText.startsWith("{")) {
+    const m = jsonText.match(/\{[\s\S]*\}\s*$/);
+    if (m) jsonText = m[0];
+    else if (lastBrace !== -1) jsonText = jsonText.slice(lastBrace);
+  }
+  try { writeFileSync(stepFile, jsonText.slice(0, 20000)); } catch {}
+  if (status !== 0 && !jsonText) {
+    const errText = `muse exec exit ${status}: ${stderr.slice(0, 300)}`;
+    try {
+      const { recordActivity } = await import("./db.js");
+      recordActivity(cfg.root, { runId: toolCtx.runId || null, kind: "session", actor: agent, action: `session:${sessionId}`, detail: `muse model=${museModel} ${errText}`, durationMs: Date.now() - t0, status: "failed" });
+    } catch {}
+    return { sessionId, agent, model: museModel, raw, error: errText, ok: false, patch: null, stepFile };
+  }
+  const rec = jsonContract
+    ? reconcileSessionJson(jsonText)
+    : { ok: true, patch: { status: "done", summary: jsonText.slice(0, 300), output: jsonText.slice(0, 8000), next: "", progress: 0, tokens: 0 } };
+  // If the model returned status "complete" (schema-shaped) map to done.
+  if (rec.patch && !["done", "failed", "blocked"].includes(rec.patch.status)) {
+    if (/complete|success/i.test(rec.patch.status)) rec.patch.status = "done";
+  }
+  try {
+    const { recordActivity, bumpRunStats } = await import("./db.js");
+    if (rec.ok && rec.patch?.tokens) bumpRunStats(cfg.root, runId === "adhoc" ? null : runId, { tokens: rec.patch.tokens });
+    recordActivity(cfg.root, {
+      runId: toolCtx.runId || null, kind: "session", actor: agent,
+      action: `session:${sessionId}`, detail: `muse model=${museModel} file=${stepFile.split("/").slice(-2).join("/")} ok=${rec.ok} status=${rec.patch?.status || rec.error || "?"}`,
+      durationMs: Date.now() - t0, status: rec.ok ? "ok" : "failed",
+    });
+  } catch {}
+  void existsSync;
+  void readFileSync;
+  return { sessionId, agent, model: museModel, raw: jsonText, stepFile, ...rec };
 }
 export async function chatWithTools(cfg, agentId, userPrompt, { extraContext = "", toolCtx = {} } = {}) {
   const agent = cfg.agents.get(agentId);

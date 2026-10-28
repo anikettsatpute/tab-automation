@@ -93,22 +93,22 @@
   </tbody></table></div>
   <div class="row"><button type="button" class="btn sm" id="loopadd">+ Add step</button><span class="spacer"></span><button type="button" class="btn sm primary" id="loopsave">Save steps</button></div>`}function S(){let e=r.cfgData;if(!e)return`<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><div class="skel" style="height:12px;width:75%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;let t=e.providers?.providers||[],i=e.agents?.agents||[];return`<div class="card"><h3>Configuration <span class="hint">providers · models · default prompts</span></h3>
   ${r.cfgMsg?`<div class="notice ok">${n(r.cfgMsg)}</div>`:``}
-  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${n(e.providers?.defaultProvider||`azure`)}). Empty prompt uses the agent's defaultPrompt.</p>
-  <h4>PROVIDERS (default: ${n(e.providers?.defaultProvider||`azure`)})</h4>
+  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${n(e.providers?.defaultProvider||`muse`)}). Empty prompt uses the agent's defaultPrompt. Muse CLI sessions write step JSON to data/responses/&lt;runId&gt;/stepN.json.</p>
+  <h4>PROVIDERS (default: ${n(e.providers?.defaultProvider||`muse`)})</h4>
   <div class="tblwrap"><table class="tbl"><thead><tr><th>ID</th><th>Type</th><th>Model default</th><th>Key env</th><th>Endpoint</th></tr></thead><tbody>
   ${t.map((e,t)=>`<tr><td><b>${n(e.id)}</b></td><td>${n(e.type)}</td>
-  <td><input data-cprov="${t}" data-cf="modelDefault" value="${n(e.modelDefault||``)}" placeholder="gpt-5.6-terra"></td>
+  <td>${e.type===`muse`?`<select data-cprov="${t}" data-cf="modelDefault">${[`muse-spark-1.3`,`muse-spark-1.2`,`muse-spark-1.1`,`muse-spark`].map(t=>`<option ${e.modelDefault===t?`selected`:``}>${t}</option>`).join(``)}</select>`:`<input data-cprov="${t}" data-cf="modelDefault" value="${n(e.modelDefault||``)}" placeholder="gpt-5.6-terra">`}</td>
   <td class="dim">${n(e.keyEnv||``)}</td><td class="dim">${n((e.endpoint||``).slice(0,50))}</td></tr>`).join(``)}
   </tbody></table></div>
   <div class="row"><label class="fld"><span>Default provider</span><select id="cfg-defprov">${t.map(t=>`<option ${e.providers?.defaultProvider===t.id?`selected`:``}>${n(t.id)}</option>`).join(``)}</select></label></div>
   <h4>AGENTS (${i.length})</h4>
-  ${i.map((e,r)=>`<div class="stepcard"><div class="row"><b>${n(e.id)}</b><span class="hint">${n(e.description||``)}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${n(e.id)}">▶ Test default prompt</button></div>
-  <div class="row"><label class="fld"><span>Provider</span><select data-cagent="${r}" data-cf="provider"><option value="">(default)</option>${t.map(t=>`<option ${e.provider===t.id?`selected`:``}>${n(t.id)}</option>`).join(``)}</select></label>
-  <label class="fld"><span>Model (empty = provider default)</span><input data-cagent="${r}" data-cf="model" value="${n(e.model||e.deployment||``)}" placeholder="provider default"></label></div>
-  <label class="fld"><span>Default prompt (used when dispatch prompt is empty)</span><textarea data-cagent="${r}" data-cf="defaultPrompt" rows="2">${n(e.defaultPrompt||``)}</textarea></label>
-  <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${n(e.id)}" placeholder="empty = agent model"></label>
-  <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${n(e.id)}" placeholder="empty = defaultPrompt"></label></div>
-  <div id="cfgtest-out-${n(e.id)}"></div></div>`).join(``)}
+  ${i.map((r,i)=>`<div class="stepcard"><div class="row"><b>${n(r.id)}</b><span class="hint">${n(r.description||``)}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${n(r.id)}">▶ Test default prompt</button></div>
+  <div class="row"><label class="fld"><span>Provider</span><select data-cagent="${i}" data-cf="provider"><option value="">(default)</option>${t.map(e=>`<option ${r.provider===e.id?`selected`:``}>${n(e.id)}</option>`).join(``)}</select></label>
+  <label class="fld"><span>Model (empty = provider default)</span>${(r.provider||e.providers?.defaultProvider)===`muse`||!r.provider&&e.providers?.defaultProvider===`muse`?`<select data-cagent="${i}" data-cf="model"><option value="">(provider default)</option>${[`muse-spark-1.3`,`muse-spark-1.2`,`muse-spark-1.1`,`muse-spark`].map(e=>`<option ${(r.model||r.deployment)===e?`selected`:``}>${e}</option>`).join(``)}</select>`:`<input data-cagent="${i}" data-cf="model" value="${n(r.model||r.deployment||``)}" placeholder="provider default">`}</label></div>
+  <label class="fld"><span>Default prompt (used when dispatch prompt is empty)</span><textarea data-cagent="${i}" data-cf="defaultPrompt" rows="2">${n(r.defaultPrompt||``)}</textarea></label>
+  <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${n(r.id)}" placeholder="empty = agent model"></label>
+  <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${n(r.id)}" placeholder="empty = defaultPrompt"></label></div>
+  <div id="cfgtest-out-${n(r.id)}"></div></div>`).join(``)}
   <div class="row"><button class="btn sm primary" id="cfgsave">Save configuration</button></div>
   <h4>STREAMS (${(e.streams?.streams||[]).length}) <span class="hint">streams replace repos</span></h4>
   ${(e.streams?.streams||[]).map(e=>`<div class="appr"><div class="row"><b>🌊 ${n(e.name||e.id)}</b><span class="kbd">${n(e.id)}</span><span class="spacer"></span><span class="hint">${n(e.description||``)}</span></div>

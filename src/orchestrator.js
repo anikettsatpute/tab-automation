@@ -64,16 +64,30 @@ export function sessionPrompt({ agent, taskTitle = "", stepGoal = "", context = 
   );
 }
 
-/** Reconcile session JSON into DB updates. Returns { ok, patch } — caller writes via updateTask/saveTaskSteps. */
+/** Reconcile session JSON into DB updates. Returns { ok, patch } — caller writes via updateTask/saveTaskSteps.
+ *  Tolerant: strips fences, takes the first complete {...} object (Muse CLI
+ *  sometimes emits a second copy), maps "complete" -> done. */
 export function reconcileSessionJson(raw) {
   let parsed;
   try {
-    const clean = String(raw ?? "").trim().replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\`\`\`\s*$/i, "").trim();
+    let clean = String(raw ?? "").trim().replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\`\`\`\s*$/i, "").trim();
+    // If multiple JSON objects concatenated, take the first complete one.
+    if (clean.startsWith("{")) {
+      let depth = 0, inStr = false, esc = false, end = -1;
+      for (let i = 0; i < clean.length; i++) {
+        const ch = clean[i];
+        if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; }
+        else { if (ch === '"') inStr = true; else if (ch === "{") depth++; else if (ch === "}") { depth--; if (depth === 0) { end = i + 1; break; } } }
+      }
+      if (end !== -1 && end < clean.length) clean = clean.slice(0, end);
+    }
     parsed = JSON.parse(clean);
   } catch (err) {
     return { ok: false, error: "session JSON parse failed: " + err.message, patch: null };
   }
-  const status = ["done", "failed", "blocked"].includes(parsed.status) ? parsed.status : "done";
+  let status = String(parsed.status || "done").toLowerCase();
+  if (/complete|success/.test(status)) status = "done";
+  if (!["done", "failed", "blocked"].includes(status)) status = "done";
   const patch = {
     status,
     summary: String(parsed.summary || "").slice(0, 1000),

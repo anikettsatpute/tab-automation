@@ -1,21 +1,36 @@
-// Provider abstraction: azure-foundry | openrouter | meta.
+// Provider abstraction: azure-foundry | openrouter | meta | muse.
 // Agents pick provider + model; secrets stay in .env, non-secrets in config/providers.json.
+// muse = Muse CLI headless dispatch (`muse exec --model <id>`); MUSE_KEY in .env.
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
-export const PROVIDER_TYPES = ["azure-foundry", "openrouter", "meta"];
+export const PROVIDER_TYPES = ["azure-foundry", "openrouter", "meta", "muse"];
 
 export const DEFAULT_ENDPOINTS = {
   "azure-foundry": "",
   openrouter: "https://openrouter.ai/api/v1",
   meta: "https://api.llama.com/compat/v1",
+  muse: "",
 };
 
 export const KEY_ENV = {
   "azure-foundry": "AZURE_OPENAI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
   meta: "META_API_KEY",
+  muse: "MUSE_KEY",
 };
+
+// Muse CLI model catalog (reference: muse model-profile show <model>).
+// Default per user: muse-spark-1.3 contributor. Other options selectable per
+// agent in Configuration (agent.model) or per call (dispatch model override).
+export const MUSE_MODELS = [
+  "muse-spark-1.3",
+  "muse-spark-1.2",
+  "muse-spark-1.1",
+  "muse-spark",
+];
+
+export const MUSE_DEFAULT_MODEL = "muse-spark-1.3";
 
 export function loadProviders(root) {
   const p = path.join(root, "config", "providers.json");
@@ -32,6 +47,20 @@ export function resolveProvider(cfg, agent) {
   const providers = new Map((cfg.providers ?? []).map((pr) => [pr.id, pr]));
   const providerId = agent?.provider || cfg.defaultProvider || "azure";
   const pr = providers.get(providerId);
+
+  // Muse CLI: no HTTP endpoint — dispatch shells out to `muse exec`.
+  // Model: per-call > agent.model > provider.modelDefault > muse-spark-1.3.
+  if (pr?.type === "muse" || providerId === "muse") {
+    const keyEnv = pr?.keyEnv || KEY_ENV.muse;
+    return {
+      id: pr?.id || "muse",
+      type: "muse",
+      endpoint: "",
+      apiKey: (process.env[keyEnv] ?? "").trim(),
+      model: (agent?.model?.trim() || pr?.modelDefault || MUSE_DEFAULT_MODEL).trim(),
+      apiVersion: "",
+    };
+  }
 
   // Legacy fallback: top-level cfg.azure (existing behavior preserved)
   if (!pr) {

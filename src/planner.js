@@ -144,6 +144,27 @@ export async function planPipeline(cfg, text, historyBlock = "") {
 
 /** Handle one Discord message via Rick: classify, reply or run pipeline. */
 export async function handleRickMessage(cfg, deps, msg, text) {
+  // Single-response contract: exactly ONE user-visible ack per message.
+  // Task/automation launches reply once ("queued"); progress + final result
+  // stream afterwards. No "On it" + "Plan" + "Done" triple chatter.
+  // Cross-process idempotency: if the SAME goal text already launched a
+  // discord run in the last 5 min (e.g. a stale bot with the same token
+  // answered first), do NOT launch again — just point at the existing run.
+  // This makes double-delivery harmless no matter which process fires second.
+  try {
+    const { listRuns } = await import("./db.js");
+    const goal = String(text || "").trim().slice(0, 400);
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    for (const r of listRuns(cfg.root, { limit: 15 })) {
+      let trig = {};
+      try { trig = JSON.parse(r.trigger_json || "{}"); } catch { continue; }
+      if (!String(trig.kind || "").startsWith("discord")) continue;
+      if (String(trig.text || "").trim().slice(0, 400) !== goal) continue;
+      if (new Date(r.started_at || 0).getTime() < cutoff) continue;
+      try { const { writeLog } = await import("./db.js"); writeLog(cfg.root, { level: "info", source: "rick-route", message: `dedupe: goal already launched as ${r.id} (${r.workflow_id}) — skipping second launch` }); } catch {}
+      return { kind: "duplicate", runId: r.id, workflow: r.workflow_id };
+    }
+  } catch { /* never block handling on the guard */ }
   const channelHistory = recentChannel(cfg.root, msg.channelId, 12);
   const historyBlock = channelHistory.length
     ? `\n\nRecent conversation in this channel (oldest first, use for "run it" / follow-ups):\n${channelHistory.map((h) => `[${h.user}]: ${h.text.slice(0, 300)}`).join("\n")}`
@@ -173,7 +194,7 @@ export async function handleRickMessage(cfg, deps, msg, text) {
     if (type) {
       saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
       await msg.channel.sendTyping().catch(() => {});
-      await msg.reply(`🧩 Got it — launching **${type.name}** task (repeatable pipeline: ${(type.agents || []).join(" → ")})… watch the dashboard Tasks tab move.`);
+      await msg.reply(`🧩 Task queued: **${type.name}** (${(type.agents || []).join(" → ")}). Watch the dashboard Tasks tab — progress streams there.`);
       const taskId = createTask(cfg.root, {
         title: `${type.name}: ${text.slice(0, 80)}`, repo: type.stream || "general",
         task_type: type.id, status: "open", end_goal: text.slice(0, 4000),
@@ -223,7 +244,7 @@ export async function handleRickMessage(cfg, deps, msg, text) {
     if (wf) {
       saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
       await msg.channel.sendTyping().catch(() => {});
-      await msg.reply(`▶️ Got it — running **${wf.id}** (${wf.name})… watch the dashboard Runs tab move.`);
+      await msg.reply(`⚙️ Automation queued: **${wf.id}**. Watch the dashboard Runs tab — progress streams there.`);
       const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
       const ctx = await deps.runWorkflow(wf, {
         kind: "discord", command: wf.trigger?.command || wf.id,
@@ -276,8 +297,8 @@ export async function handleRickMessage(cfg, deps, msg, text) {
     for (const part of chunk(reply)) await msg.reply(part);
     return { kind };
   }
-  // big-task: plan + run pipeline, stream progress
-  await msg.reply("🔧 On it — breaking this into steps…");
+  // big-task: plan + run pipeline. Single ack AFTER the plan is built
+  // (no "On it" pre-message) so one goal = one reply + streamed result.
   const pipeline = await planPipeline(cfg, text, historyBlock);
   // planner chose an existing automation -> run it directly
   if (pipeline.useWorkflow) {
@@ -292,7 +313,7 @@ export async function handleRickMessage(cfg, deps, msg, text) {
     return { kind, pipeline: wf.id, steps: Object.keys(ctx.steps) };
   }
   const names = pipeline.steps.filter((s) => s.type === "agent").map((s) => s.agent).join(" → ");
-  await msg.reply(`📋 Plan (${pipeline.steps.length - 1} steps): ${names}`);
+  await msg.reply(`🧩 Task queued: custom pipeline (${names}). Watch the dashboard Tasks tab — progress streams there.`);
   const ctx = await deps.runWorkflow(pipeline, {
     kind: "discord-pipeline", text, user: msg.author.tag, channelId: msg.channelId,
   }, msg.channelId);

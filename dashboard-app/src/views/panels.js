@@ -9,18 +9,22 @@ export function configView() {
   const agents = c.agents?.agents || [];
   return `<div class="card"><h3>Configuration <span class="hint">providers · models · default prompts</span></h3>
   ${S.cfgMsg ? `<div class="notice ok">${esc(S.cfgMsg)}</div>` : ""}
-  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${esc(c.providers?.defaultProvider || "azure")}). Empty prompt uses the agent's defaultPrompt.</p>
-  <h4>PROVIDERS (default: ${esc(c.providers?.defaultProvider || "azure")})</h4>
+  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${esc(c.providers?.defaultProvider || "muse")}). Empty prompt uses the agent's defaultPrompt. Muse CLI sessions write step JSON to data/responses/&lt;runId&gt;/stepN.json.</p>
+  <h4>PROVIDERS (default: ${esc(c.providers?.defaultProvider || "muse")})</h4>
   <div class="tblwrap"><table class="tbl"><thead><tr><th>ID</th><th>Type</th><th>Model default</th><th>Key env</th><th>Endpoint</th></tr></thead><tbody>
   ${provs.map((p, i) => `<tr><td><b>${esc(p.id)}</b></td><td>${esc(p.type)}</td>
-  <td><input data-cprov="${i}" data-cf="modelDefault" value="${esc(p.modelDefault || "")}" placeholder="gpt-5.6-terra"></td>
+  <td>${p.type === "muse"
+    ? `<select data-cprov="${i}" data-cf="modelDefault">${["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-spark"].map((m) => `<option ${p.modelDefault === m ? "selected" : ""}>${m}</option>`).join("")}</select>`
+    : `<input data-cprov="${i}" data-cf="modelDefault" value="${esc(p.modelDefault || "")}" placeholder="gpt-5.6-terra">`}</td>
   <td class="dim">${esc(p.keyEnv || "")}</td><td class="dim">${esc((p.endpoint || "").slice(0, 50))}</td></tr>`).join("")}
   </tbody></table></div>
   <div class="row"><label class="fld"><span>Default provider</span><select id="cfg-defprov">${provs.map((p) => `<option ${c.providers?.defaultProvider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label></div>
   <h4>AGENTS (${agents.length})</h4>
   ${agents.map((a, i) => `<div class="stepcard"><div class="row"><b>${esc(a.id)}</b><span class="hint">${esc(a.description || "")}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${esc(a.id)}">▶ Test default prompt</button></div>
   <div class="row"><label class="fld"><span>Provider</span><select data-cagent="${i}" data-cf="provider"><option value="">(default)</option>${provs.map((p) => `<option ${a.provider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label>
-  <label class="fld"><span>Model (empty = provider default)</span><input data-cagent="${i}" data-cf="model" value="${esc(a.model || a.deployment || "")}" placeholder="provider default"></label></div>
+  <label class="fld"><span>Model (empty = provider default)</span>${(a.provider || c.providers?.defaultProvider) === "muse" || (!a.provider && c.providers?.defaultProvider === "muse")
+    ? `<select data-cagent="${i}" data-cf="model"><option value="">(provider default)</option>${["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-spark"].map((m) => `<option ${(a.model || a.deployment) === m ? "selected" : ""}>${m}</option>`).join("")}</select>`
+    : `<input data-cagent="${i}" data-cf="model" value="${esc(a.model || a.deployment || "")}" placeholder="provider default">`}</label></div>
   <label class="fld"><span>Default prompt (used when dispatch prompt is empty)</span><textarea data-cagent="${i}" data-cf="defaultPrompt" rows="2">${esc(a.defaultPrompt || "")}</textarea></label>
   <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${esc(a.id)}" placeholder="empty = agent model"></label>
   <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${esc(a.id)}" placeholder="empty = defaultPrompt"></label></div>

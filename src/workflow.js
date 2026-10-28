@@ -109,7 +109,10 @@ export async function runWorkflow(cfg, deps, workflow, triggerCtx = {}) {
   };
   let runId = null;
   try {
-    runId = createRun(cfg.root, { workflowId: workflow.id, kind: triggerCtx.kind || "manual", trigger: triggerCtx });
+    // Provenance: which process launched this run (pid + code marker).
+    // Lets us attribute duplicate runs when two bots share a token.
+    const marked = { ...triggerCtx, _launcher: { pid: process.pid, v: "muse-single-ack" } };
+    runId = createRun(cfg.root, { workflowId: workflow.id, kind: triggerCtx.kind || "manual", trigger: marked });
   } catch (err) {
     deps.log?.(`[db] createRun failed (continuing without persistence): ${err.message}`);
   }
@@ -207,7 +210,7 @@ async function runStep(cfg, deps, step, ctx) {
       const mem = step.memory === false ? "" : formatMemories(searchMemory(cfg.root, prompt, 4));
       const tAgent = Date.now();
       // Loop dispatch: ONE Muse session per step as the agent dispatcher.
-      // Session writes JSON (SESSION_JSON_CONTRACT); our loop reconciles it into the DB.
+      // Session writes JSON (SESSION_JSON_CONTRACT) to step<N>.json; our loop reconciles it into the DB.
       // Model selection lives in configuration (step.model > agent.model > provider.modelDefault).
       const { dispatchAgent } = await import("./agent.js");
       const session = await dispatchAgent(cfg, {
@@ -216,6 +219,7 @@ async function runStep(cfg, deps, step, ctx) {
         toolCtx: {
           runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "",
           taskTitle: ctx.trigger?.text || ctx.workflow, stepGoal: step.id,
+          stepIdx: ctx._stepIdx ?? 0, stepNumber: ctx._stepIdx ?? 0,
         },
         useTools: step.tools !== false,
         jsonContract: step.jsonContract !== false,
