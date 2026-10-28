@@ -75,7 +75,7 @@ const statusBadge = (st) => {
 // ---------- sidebar (PRD 4.2: nav + counts + status filter) ----------
 const NAV = [
   ["board", "Board"], ["assistant", "Assistant"], ["brain", "Brain messages"], ["todos", "TODOs"],
-  ["automations", "Automations"], ["config", "Configuration"], ["ado", "ADO items"], ["requests", "Requests"],
+  ["automations", "Automations"], ["config", "Configuration"], ["requests", "Requests"],
   ["outbox", "Outbox"], ["activity", "Activity"], ["retro", "Retro"],
 ];
 const NAV_COUNT = () => ({
@@ -381,7 +381,6 @@ function render() {
     v === "activity" ? `<div class="card"><h3>Activity <span class="hint">global audit stream</span></h3><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("")}</div></div>` :
     v === "retro" ? retroView() :
     v === "logs" ? logsView() : v === "tools" ? toolsView() : v === "agents" ? agentsView() :
-    v === "ado" ? `<div class="card"><h3>ADO items</h3><p class="hint">Azure DevOps work items, bugs, user stories, PR links. Linked PRs appear on task cards (🔀 PR). Inline sync lands here when ADO credentials are configured.</p>${S.tasks.filter((t) => t.prUrl).map((t) => `<div class="appr"><div class="row"><b>${esc((t.title || "").slice(0, 80))}</b><span class="spacer"></span><a class="btn sm" href="${esc(t.prUrl)}" target="_blank">Open PR ↗</a></div></div>`).join("") || `<p class="hint">No linked PRs yet.</p>`}</div>` :
     `<div class="card"><h3>${esc(v)}</h3><p class="hint">Coming soon.</p></div>`;
   $("#app").innerHTML = `<div class="app">${sidebar()}<main class="main">${topbar()}${main}</main></div>${reqModal()}${cmdPalette()}`;
   $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; render(); }));
@@ -489,7 +488,7 @@ function cmdPalette() {
   const cmds = [
     ["board", "Go to Board"], ["assistant", "Go to Assistant"], ["brain", "Go to Brain messages"],
     ["todos", "Go to TODOs"], ["automations", "Go to Automations"], ["config", "Go to Configuration"],
-    ["ado", "Go to ADO items"], ["requests", "Go to Requests"],
+    ["requests", "Go to Requests"],
     ["outbox", "Go to Outbox"], ["activity", "Go to Activity"], ["retro", "Go to Retro"],
     ["new", "+ New task"], ["pause", "Pause / Resume"], ["refresh", "Refresh now"],
   ].filter(([v, l]) => !S.q || l.toLowerCase().includes(S.q.toLowerCase()));

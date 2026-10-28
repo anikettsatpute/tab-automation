@@ -54,6 +54,28 @@ if (errors.length) {
 
 log(`tab-automation starting: ${cfg.workflows.length} workflows, ${cfg.agents.size} agents`);
 
+// Mirror config/workflows.json -> automations DB so the Control Room Automations
+// view always shows what Setup Step 5 deploys (same sync the setup wizard does
+// on save; boot-time backfill covers file edits + tablet pulls).
+try {
+  const { saveAutomation, listAutomations } = await import("./db.js");
+  const have = new Set(listAutomations(cfg.root).map((a) => a.id));
+  let synced = 0;
+  for (const w of cfg.workflows) {
+    if (have.has(w.id)) continue;
+    saveAutomation(cfg.root, {
+      id: w.id, name: w.name || w.id, description: w.description || "",
+      trigger_type: w.trigger?.type || "manual",
+      trigger_config: { cron: w.trigger?.cron, command: w.trigger?.command, description: w.trigger?.description, everyMinutes: w.trigger?.everyMinutes },
+      steps: w.steps || [], enabled: w.enabled !== false,
+    });
+    synced++;
+  }
+  if (synced) log(`[automations] boot-synced ${synced} workflows from config`);
+} catch (err) {
+  log(`[automations] boot sync skipped: ${err.message}`);
+}
+
 let sendDiscord = async () => {};
 const deps = {
   log,
