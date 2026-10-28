@@ -46,13 +46,22 @@ export function automationRunsView() {
   const flows = S.flows || [];
   const tasks = S.tasks || [];
   const runsByFlow = new Map();
+  const unmatched = [];
   for (const t of tasks) {
     const k = t.workflow || t.taskType || "";
-    if (!runsByFlow.has(k)) runsByFlow.set(k, []);
-    runsByFlow.get(k).push(t);
+    // Task launches (task-<id>) and ad-hoc runs don't match a flow id —
+    // show them under an "Other runs" group instead of hiding them.
+    if (flows.some((f) => f.id === k)) { if (!runsByFlow.has(k)) runsByFlow.set(k, []); runsByFlow.get(k).push(t); }
+    else unmatched.push(t);
   }
+  const shown = [...runsByFlow.values()].reduce((n, r) => n + r.length, 0);
   return `
-  <div class="bhead"><h2>Automation runs <span class="hint">${tasks.length} runs across ${flows.length} flows</span></h2></div>
+  <div class="bhead"><h2>Automation runs <span class="hint">${tasks.length} runs across ${flows.length} flows${unmatched.length ? ` + ${unmatched.length} task/ad-hoc` : ""}</span></h2></div>
+  ${unmatched.length ? `<div class="flowcard"><div class="row"><div><h3>Task &amp; ad-hoc runs</h3><p class="dim">Launches from task types, Discord, and chat — not tied to an automation flow.</p></div></div>
+  <div class="tblwrap"><table class="tbl"><thead><tr><th scope="col">Run</th><th scope="col">Pipeline</th><th scope="col">Status</th><th scope="col">Started</th><th scope="col">Steps</th><th scope="col"></th></tr></thead><tbody>
+  ${unmatched.slice(0, 10).map((r) => `<tr><td><span class="kbd">${esc(r.id.slice(0, 8))}</span></td><td class="dim">${esc((r.workflow || r.taskType || "").slice(0, 28))}</td><td>${statusBadge(r.status)}</td><td class="dim">${esc(String(r.startedAt || "").slice(0, 16).replace("T", " "))}</td><td class="dim">${r.progress.completed}/${r.progress.total}</td>
+  <td><button type="button" class="btn sm ghost" data-sel="${esc(r.id)}">Open</button></td></tr>`).join("")}
+  </tbody></table></div></div>` : ""}
   ${flows.map((f) => {
     const runs = (runsByFlow.get(f.id) || []).slice(0, 5);
     const trig = f.trigger?.type || f.trigger || "manual";

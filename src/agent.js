@@ -149,7 +149,10 @@ export async function dispatchAgent(cfg, { agent = "assistant", model = "", prom
 // style) + reconciles it into a DB patch via reconcileSessionJson.
 // Model: resolved muse model id (default muse-spark-1.3 contributor).
 async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext = "", toolCtx = {}, jsonContract = true }) {
-  const { spawnSync } = await import("node:child_process");
+  // Async spawn (never spawnSync): the HTTP server + Discord must stay
+  // responsive while a Muse session thinks (60-120s per step). Blocking the
+  // event loop freezes the dashboard + health checks mid-run.
+  const { spawn } = await import("node:child_process");
   const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
   const { reconcileSessionJson, sessionPrompt } = await import("./orchestrator.js");
   const { MUSE_DEFAULT_MODEL } = await import("./providers.js");
@@ -183,13 +186,29 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
   const env = { ...process.env };
   // MUSE_KEY from .env authenticates the CLI (meta provider).
   if (!env.MUSE_KEY && cfg.museKey) env.MUSE_KEY = cfg.museKey;
+  // Async run with timeout: collects stdout/stderr without blocking the loop.
+  const runMuse = () => new Promise((resolve) => {
+    let raw = "", stderr = "";
+    let child;
+    try {
+      child = spawn("muse", args, { env, cwd: cfg.root, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (err) {
+      resolve({ raw: "", stderr: String(err.message || err), status: 1, spawnError: err });
+      return;
+    }
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 300000);
+    child.stdout?.on("data", (d) => { raw += String(d); if (raw.length > 8 * 1024 * 1024) raw = raw.slice(-8 * 1024 * 1024); });
+    child.stderr?.on("data", (d) => { stderr += String(d); if (stderr.length > 512 * 1024) stderr = stderr.slice(-512 * 1024); });
+    child.on("error", (err) => { clearTimeout(timer); resolve({ raw, stderr, status: 1, spawnError: err }); });
+    child.on("close", (code) => { clearTimeout(timer); resolve({ raw, stderr, status: Number(code ?? 1) }); });
+  });
   let raw = "", stderr = "", status = 0;
   try {
-    const r = spawnSync("muse", args, { encoding: "utf-8", env, timeout: 300000, maxBuffer: 8 * 1024 * 1024, cwd: cfg.root });
-    raw = String(r.stdout || "");
+    const r = await runMuse();
+    raw = String(r.raw || "");
     stderr = String(r.stderr || "");
-    status = Number(r.status ?? (r.error ? 1 : 0));
-    if (r.error) throw r.error;
+    status = Number(r.status ?? (r.spawnError ? 1 : 0));
+    if (r.spawnError && !raw) throw r.spawnError;
   } catch (err) {
     const rec0 = { ok: false, error: `muse exec failed: ${String(err.message || err).slice(0, 300)}`, patch: null };
     try {

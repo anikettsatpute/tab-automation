@@ -271,15 +271,27 @@ async function tick(force) {
     ]);
     if (cfg) S.cfg = cfg;
     if (ov) S.ov = ov;
-    S.tasks = tasks.tasks || []; S.agents = agents.agents || []; S.tools = tools.tools || [];
-    S.activity = activity.activity || []; S.logs = logs.logs || [];
-    S.approvals = appr.approvals || []; S.todos = todos.todos || []; S.reminders = todos.reminders || [];
-    if (feed) S.feed = feed; if (brain) S.brain = brain; S.flows = flows.flows || [];
-    S.requests = requests.requests || []; S.outbox = outbox.outbox || [];
+    // Resilient tick: a failed fetch keeps the last good data instead of
+    // blanking the board to "0 runs". Only overwrite on real payloads.
+    // (The bot's HTTP loop can stall for a minute while a Muse session thinks;
+    // the board must show stale data + a notice, not an empty screen.)
+    const hadTasks = (S.tasks || []).length;
+    if (Array.isArray(tasks.tasks)) S.tasks = tasks.tasks;
+    if (Array.isArray(agents.agents)) S.agents = agents.agents;
+    if (Array.isArray(tools.tools)) S.tools = tools.tools;
+    if (Array.isArray(activity.activity)) S.activity = activity.activity;
+    if (Array.isArray(logs.logs)) S.logs = logs.logs;
+    if (Array.isArray(appr.approvals)) S.approvals = appr.approvals;
+    if (Array.isArray(todos.todos)) { S.todos = todos.todos; S.reminders = todos.reminders || []; }
+    if (feed) S.feed = feed; if (brain) S.brain = brain;
+    if (Array.isArray(flows.flows)) S.flows = flows.flows;
+    if (Array.isArray(requests.requests)) S.requests = requests.requests;
+    if (Array.isArray(outbox.outbox)) S.outbox = outbox.outbox;
     if (retro) S.retro = retro;
-    S.loopTasks = loopTasks.tasks || [];
-    S.taskTypes = taskTypes.taskTypes || [];
+    if (Array.isArray(loopTasks.tasks)) S.loopTasks = loopTasks.tasks;
+    if (Array.isArray(taskTypes.taskTypes)) S.taskTypes = taskTypes.taskTypes;
     if (cfgData) S.cfgData = cfgData;
+    S.stale = hadTasks > 0 && (S.tasks || []).length === 0 ? false : (tasks.tasks ? false : true);
     if (S.sel && !S.detail) { loadDetail(S.sel); return; }
     if (S.loopSel && !S.loopDetail) { loadLoopDetail(S.loopSel); return; }
     render(); arm();

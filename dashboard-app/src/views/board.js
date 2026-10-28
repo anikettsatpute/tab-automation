@@ -17,8 +17,10 @@ export function boardView(detailPane) {
   if (S.sortBy === "recent") list = [...list].sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
   else list = [...list].sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const lsel = S.loopDetail;
+  const stale = S.stale ? `<div class="notice" role="status">Bot is thinking (Muse session running) — showing last loaded data. Auto-refresh resumes when it responds.</div>` : "";
   return `
   ${attentionBanners()}
+  ${stale}
   <div class="bhead"><h2>Board <span class="hint">${list.length} runs · ${lt.length} loop tasks</span></h2>
     <div class="btabs" role="tablist" aria-label="Board view">${[["tasks", "Tasks"], ["runs", "Automation runs"], ["loop", "Loop tasks"]].map(([v, l]) => `<button type="button" role="tab" aria-selected="${S.boardTab === v}" class="tab ${S.boardTab === v ? "on" : ""}" data-btab="${v}">${l}</button>`).join("")}</div>
     <span class="spacer"></span>
