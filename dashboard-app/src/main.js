@@ -109,7 +109,6 @@ function topbar() {
     <span class="ws">tab-automation</span>
     <input id="fq" placeholder="Filter tasks ( / )" value="${esc(S.q)}">
     <button class="btn sm" id="cmds">⌘ Commands <kbd>⌘K</kbd></button>
-    <button class="btn sm" id="sweep">🧹 Sweep PRs${t.failed ? ` (${t.failed})` : ""}</button>
     <button class="btn sm ${S.auto ? "on" : ""}" id="autobtn">⚡ Auto</button>
     <button class="btn sm" id="resume">${S.paused ? "▶ Resume" : "⏸ Pause"}</button>
     <button class="btn sm ghost" id="refresh" title="Refresh now">🔄</button>
@@ -218,8 +217,7 @@ function detailPane(d) {
   <p class="hint">${esc(statusDesc)}</p>
   <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div><div class="hint">${d.progress.completed}/${d.progress.total}</div>
   <div class="pipe">${pipeStages(d)}</div>
-  <div class="dact"><button class="btn sm primary" data-act="req-changes">Request changes</button><button class="btn sm" data-act="sweep">Sweep PR comments</button>
-    <button class="btn sm" data-act="done">✓ Mark done</button>${d.prUrl ? `<a class="btn sm" href="${esc(d.prUrl)}" target="_blank">Open PR ↗</a>` : ""}
+  <div class="dact"><button class="btn sm primary" data-act="req-changes">Request changes</button>${d.prUrl ? `<a class="btn sm" href="${esc(d.prUrl)}" target="_blank">Open PR ↗</a>` : ""}
     <button class="btn sm" data-act="append">+ Append task</button><button class="btn sm" data-act="requeue">Re-queue</button><button class="btn sm danger" data-act="del">🗑 Delete</button></div>
   <div id="actbox"></div>
   <nav class="tabs">${tabs.map(([v, l]) => `<button class="tab ${S.detailTab === v ? "on" : ""}" data-dtab="${v}">${esc(l)}</button>`).join("")}</nav>
@@ -420,7 +418,7 @@ function render() {
       return;
     }
     if (a === "requeue") { S.detailTab = "steps"; render(); return; }
-    const map = { done: "done", sweep: "sweep", del: "delete" };
+    const map = { del: "delete" };
     if (map[a]) {
       if (a === "del" && !confirm("Delete this task and its worktree?")) return;
       await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: map[a] }) });
@@ -444,7 +442,6 @@ function render() {
     if (v === "pause") { S.paused = !S.paused; render(); arm(); return; }
     S.view = v; S.sel = null; S.detail = null; render();
   }));
-  const sw = $("#sweep"); if (sw) sw.onclick = async () => { const bad = S.tasks.filter((t) => t.status === "failed"); for (const t of bad.slice(0, 5)) { await api(`/api/control/task/${t.id}/action`, { method: "POST", body: JSON.stringify({ action: "sweep" }) }).catch(() => {}); } tick(true); };
   const ab = $("#autobtn"); if (ab) ab.onclick = () => { S.auto = !S.auto; render(); arm(); };
   const rs = $("#resume"); if (rs) rs.onclick = () => { S.paused = !S.paused; render(); arm(); };
   const rf = $("#refresh"); if (rf) rf.onclick = () => tick(true);
