@@ -1,7 +1,8 @@
-// Board views: runs board + loop-tasks board + detail panes.
+// Board shell: tab switcher + delegates to task / automation-runs / loop views.
 // Pure render functions — state + events live in main.js.
-import { S, esc, ago, statusBadge, AGENT_OPTS } from "./state.js";
+import { S, esc } from "./state.js";
 import { attentionBanners } from "./shell.js";
+import { tasksView, automationRunsView } from "./tasks.js";
 
 export function boardView(detailPane) {
   const lt = (S.loopTasks || []).filter((t) =>
@@ -15,31 +16,16 @@ export function boardView(detailPane) {
   else if (S.statusFilter === "PR review") list = list.filter((r) => r.prUrl);
   if (S.sortBy === "recent") list = [...list].sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
   else list = [...list].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  const sel = S.detail;
   const lsel = S.loopDetail;
   return `
   ${attentionBanners()}
   <div class="bhead"><h2>Board <span class="hint">${list.length} runs · ${lt.length} loop tasks</span></h2>
     <div class="btabs" role="tablist" aria-label="Board view">${[["tasks", "Tasks"], ["runs", "Automation runs"], ["loop", "Loop tasks"]].map(([v, l]) => `<button type="button" role="tab" aria-selected="${S.boardTab === v}" class="tab ${S.boardTab === v ? "on" : ""}" data-btab="${v}">${l}</button>`).join("")}</div>
     <span class="spacer"></span>
-    <label class="sr" for="sortby">Sort tasks</label>
-    <select id="sortby" class="sel"><option value="recent" ${S.sortBy === "recent" ? "selected" : ""}>Recent activity</option><option value="id" ${S.sortBy === "id" ? "selected" : ""}>By Task ID</option></select>
+    ${S.boardTab === "tasks" ? `<label class="sr" for="sortby">Sort tasks</label>
+    <select id="sortby" class="sel"><option value="recent" ${S.sortBy === "recent" ? "selected" : ""}>Recent activity</option><option value="id" ${S.sortBy === "id" ? "selected" : ""}>By Task ID</option></select>` : ""}
   </div>
-  ${S.boardTab === "loop" ? loopTasksView(lt, lsel) : `
-  <div class="board2">
-    <div class="blist" role="list" aria-label="Runs">
-      ${list.map((r) => `
-      <button type="button" role="listitem" class="bcard ${S.sel === r.id ? "sel" : ""}" data-sel="${esc(r.id)}" aria-current="${S.sel === r.id}" aria-label="${esc((r.title || r.workflow || "task").slice(0, 80))} — ${esc(r.status)}">
-        <span class="btop">${statusBadge(r.status)} <span class="hint">#${esc(r.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(r.startedAt)}</span></span>
-        <span class="btitle">${esc((r.title || r.workflow || "").slice(0, 100))}</span>
-        <span class="bmeta"><span class="kbd">${esc(r.repository || "tab-automation")}</span> <span class="kbd">${esc(r.taskType || r.kind || "")}</span> <span class="kbd">branch ${esc((r.branch || "").slice(0, 40))}</span></span>
-        <span class="bmeta"><span class="hint">${r.progress.completed}/${r.progress.total} steps</span>
-          ${r.tokens ? `<span class="hint">${Number(r.tokens).toLocaleString()} tokens</span>` : ""} ${r.toolCalls ? `<span class="hint">${r.toolCalls} tool calls</span>` : ""}
-          ${r.commentsCount ? `<span class="hint">${r.commentsCount} comments</span>` : ""} ${r.prUrl ? `<span class="hint">PR linked</span>` : ""}</span>
-      </button>`).join("") || `<div class="empty" role="status">No tasks match the current filter. <button type="button" class="btn sm ghost" data-clearf>Clear filter</button></div>`}
-    </div>
-    <div class="bdetail">${sel ? detailPane(sel) : `<div class="empty">Select a task to inspect.</div>`}</div>
-  </div>`}`;
+  ${S.boardTab === "loop" ? loopTasksView(lt, lsel) : S.boardTab === "runs" ? automationRunsView() : tasksView(list, detailPane)}`;
 }
 
 export function loopTasksView(lt, lsel) {
