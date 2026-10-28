@@ -14,7 +14,7 @@ const S = {
   approvals: [], todos: [], reminders: [], feed: null, brain: null, flows: [],
   requests: [], outbox: [], retro: null,
   q: "", auto: true, timer: null, logLevel: "", showReq: false, reqMode: "request",
-  reqAgents: ["assistant"], reqRepo: "tab-automation", reqBusy: false, reqMsg: "",
+  reqAgents: ["assistant"], reqStream: "general", reqPipeline: "", reqBusy: false, reqMsg: "",
   expandedSteps: new Set(), expandedVariants: new Set(), rerunText: "",
   brainSel: null, brainTab: "details", brainQ: "", flowSel: null,
   flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "", flowRule: "",
@@ -26,8 +26,10 @@ const S = {
   paused: false,
 };
 // Agent pipeline: OUR agents from config/agents.json are the pipeline.
-// The divider picks agents; each step spawns a Muse session that writes JSON.
+// Streams group agents; pipelines chain agent->agent. Divider picks stream+pipeline.
 const AGENT_OPTS = ["assistant", "summarizer", "coder", "finance-india", "finance-us"];
+const streamName = (id) => (S.cfgData?.streams?.streams || []).find((s) => s.id === id)?.name || id;
+const streamPipes = (sid) => (S.cfgData?.streams?.pipelines || []).filter((p) => !sid || p.stream === sid);
 
 async function api(path, opts = {}) {
   const ctrl = new AbortController();
@@ -269,7 +271,14 @@ function configView() {
   <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${esc(a.id)}" placeholder="empty = agent model"></label>
   <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${esc(a.id)}" placeholder="empty = defaultPrompt"></label></div>
   <div id="cfgtest-out-${esc(a.id)}"></div></div>`).join("")}
-  <div class="row"><button class="btn sm primary" id="cfgsave">Save configuration</button></div></div>`;
+  <div class="row"><button class="btn sm primary" id="cfgsave">Save configuration</button></div>
+  <h4>STREAMS (${(c.streams?.streams || []).length}) <span class="hint">streams replace repos</span></h4>
+  ${(c.streams?.streams || []).map((s) => `<div class="appr"><div class="row"><b>🌊 ${esc(s.name || s.id)}</b><span class="kbd">${esc(s.id)}</span><span class="spacer"></span><span class="hint">${esc(s.description || "")}</span></div>
+  <p class="hint">agents: ${(s.agents || []).map(esc).join(", ") || "—"}</p></div>`).join("") || `<p class="hint">No streams — add them in Setup Step 6.</p>`}
+  <h4>TASK PIPELINES (${(c.streams?.pipelines || []).length}) <span class="hint">agent → agent chains</span></h4>
+  ${(c.streams?.pipelines || []).map((p) => `<div class="appr"><div class="row"><b>⛓️ ${esc(p.name || p.id)}</b><span class="kbd">${esc(p.stream || "")}</span><span class="spacer"></span><span class="hint">${esc(p.description || "")}</span></div>
+  <p class="hint">${(p.agents || []).map(esc).join(" → ") || "—"}</p></div>`).join("") || `<p class="hint">No pipelines — add them in Setup Step 6.</p>`}
+  <p class="hint">Edit streams + pipelines in Setup Step 6 (Streams) — Control Room is read-only here.</p></div>`;
 }
 function agentsView() {
   return `<div class="agrid">${(S.agents || []).map((a) => `
@@ -323,7 +332,7 @@ function requestsView() {
   return `<div class="card"><h3>Requests <span class="hint">${S.requests.length} intake</span></h3>
   <p class="hint">Raw goals awaiting / passed through the task-divider. Newest first.</p>
   ${S.requests.map((r) => `<div class="appr"><div class="row"><b>${esc(String(r.text || "").slice(0, 90))}</b><span class="spacer"></span><span class="tag ${r.status === "running" ? "run" : ""}">${esc(r.status || "queued")}</span></div>
-  <p class="hint">mode ${esc(r.mode)} · repo ${esc(r.repo)} · agents ${(JSON.parse(r.pipeline || "[]") || []).map(esc).join(" → ") || esc(r.task_type || "—")} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || `<p class="hint">No requests yet — hit + New task.</p>`}</div>`;
+  <p class="hint">mode ${esc(r.mode)} · stream ${esc(streamName(r.repo) || r.repo)} · agents ${(JSON.parse(r.pipeline || "[]") || []).map(esc).join(" → ") || esc(r.task_type || "—")} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || `<p class="hint">No requests yet — hit + New task.</p>`}</div>`;
 }
 function outboxView() {
   return `<div class="card"><h3>Outbox <span class="hint">${S.outbox.length} queued/sent</span></h3>
@@ -425,9 +434,10 @@ function reqModal() {
   <p class="hint">A raw goal. The task-divider grills it, decomposes it, and enqueues the tasks after you confirm.</p>
   <div class="row"><button class="btn sm ${S.reqMode === "request" ? "primary" : "ghost"}" id="reqm-req">Request</button><button class="btn sm ${S.reqMode === "direct" ? "primary" : "ghost"}" id="reqm-dir">Direct task</button></div>
   <label class="fld"><span>What should be built or fixed?</span><textarea id="req-text" rows="4" placeholder="Describe the outcome you want. Be concrete about done-ness."></textarea></label>
-  <div class="row"><label class="fld"><span>Repo</span><select id="req-repo"><option ${S.reqRepo === "— unset —" ? "selected" : ""}>— unset —</option><option ${S.reqRepo === "tab-automation" ? "selected" : ""}>tab-automation</option></select></label></div>
+  <div class="row"><label class="fld"><span>Stream (replaces repo)</span><select id="req-stream">${(S.cfgData?.streams?.streams || [{ id: "general", name: "General" }, { id: "finance", name: "Finance" }]).map((s) => `<option value="${esc(s.id)}" ${S.reqStream === s.id ? "selected" : ""}>${esc(s.name || s.id)}</option>`).join("")}</select></label>
+  <label class="fld"><span>Pipeline (user-configured agent → agent)</span><select id="req-pipe"><option value="">— divider picks —</option>${streamPipes(S.reqStream).map((p) => `<option value="${esc(p.id)}" ${S.reqPipeline === p.id ? "selected" : ""}>${esc(p.name || p.id)} (${esc((p.agents || []).join(" → "))})</option>`).join("")}</select></label></div>
   <label class="fld"><span>Agents (pipeline — each step spawns a Muse session)</span><div class="row">${AGENT_OPTS.map((a) => `<button class="btn sm ${S.reqAgents.includes(a) ? "primary" : "ghost"}" data-reqagent="${a}">${a}</button>`).join("")}</div></label>
-  <p class="hint">Pipeline: <b>${S.reqMode === "direct" ? esc(S.reqAgents.join(" → ") || "—") : "Divider picks agents from goal"}</b> · sessions write JSON, loop reconciles to DB.</p>
+  <p class="hint">Stream <b>${esc(streamName(S.reqStream))}</b> · Pipeline: <b>${S.reqMode === "direct" ? esc(S.reqAgents.join(" → ") || "—") : "Divider picks stream + agents from goal"}</b> · sessions write JSON, loop reconciles to DB.</p>
   <label class="fld"><span>Attach files (screenshots, logs — names only, stored alongside run)</span><input id="req-files" placeholder="e.g. screenshot.png, trace.log"></label>
   ${S.reqMsg ? `<p class="hint">${esc(S.reqMsg)}</p>` : ""}
   <div class="row"><button class="btn primary" id="req-go" ${S.reqBusy ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : "Enqueue Task"}</button></div></div></div>`;
@@ -621,12 +631,13 @@ function wireReq() {
   const mr = $("#reqm-req"); if (mr) mr.onclick = () => { S.reqMode = "request"; render(); wireReq(); };
   const md = $("#reqm-dir"); if (md) md.onclick = () => { S.reqMode = "direct"; render(); wireReq(); };
   $$("[data-reqagent]").forEach((b) => (b.onclick = () => { const a = b.dataset.reqagent; S.reqAgents.includes(a) ? S.reqAgents = S.reqAgents.filter((x) => x !== a) : S.reqAgents.push(a); if (!S.reqAgents.length) S.reqAgents = [a]; render(); wireReq(); }));
-  const rr = $("#req-repo"); if (rr) rr.onchange = () => { S.reqRepo = rr.value; render(); wireReq(); };
+  const rs = $("#req-stream"); if (rs) rs.onchange = () => { S.reqStream = rs.value; S.reqPipeline = ""; render(); wireReq(); };
+  const rp = $("#req-pipe"); if (rp) rp.onchange = () => { S.reqPipeline = rp.value; const p = streamPipes(S.reqStream).find((x) => x.id === rp.value); if (p?.agents?.length) S.reqAgents = [...p.agents]; render(); wireReq(); };
   const g = $("#req-go"); if (g) g.onclick = async () => {
     const t = $("#req-text").value.trim(); if (!t || S.reqBusy) return;
     S.reqBusy = true; S.reqMsg = "Divider working…"; render(); wireReq();
     try {
-      const r = await api("/api/control/requests", { method: "POST", body: JSON.stringify({ text: t, mode: S.reqMode, repo: S.reqRepo === "— unset —" ? "tab-automation" : S.reqRepo, agents: S.reqAgents }) });
+      const r = await api("/api/control/requests", { method: "POST", body: JSON.stringify({ text: t, mode: S.reqMode, stream: S.reqStream, pipeline: S.reqPipeline || undefined, agents: S.reqAgents }) });
       S.reqBusy = false; S.showReq = false; S.reqMsg = "";
       S.view = "board"; S.boardTab = "tasks"; S.sel = r.runId; S.detail = null;
       render(); if (r.runId) loadDetail(r.runId); else tick(true);

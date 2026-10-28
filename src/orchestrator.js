@@ -13,22 +13,33 @@
  */
 
 // Agent pipeline: every step dispatches one of OUR configured agents.
-// The divider picks agents (not task types); the loop reconciles session JSON -> DB.
+// Streams (config/streams.json) group agents; pipelines chain agent->agent per stream.
+// The divider picks a stream + pipeline; the loop reconciles session JSON -> DB.
 export const AGENT_PIPELINE = ["assistant", "summarizer", "coder", "finance-india", "finance-us"];
 
-/** Divider: pick OUR agents from goal text (not spec task types). */
-export function divideGoal(goalText) {
+/** Divider: pick a stream + agents from goal text. Streams come from config; heuristics map here. */
+export function divideGoal(goalText, streamsDoc = null) {
   const t = String(goalText || "").toLowerCase();
-  if (/summar|brief|tldr|compress/i.test(t)) return ["summarizer"];
-  if (/review|diff|patch|code/i.test(t)) return ["coder"];
-  if (/nse|bse|india|nifty|sensex/i.test(t)) return ["finance-india"];
-  if (/nyse|nasdaq|us market|s&p/i.test(t)) return ["finance-us"];
-  return ["assistant"];
+  const streams = streamsDoc?.streams || [];
+  const pipelines = streamsDoc?.pipelines || [];
+  const finance = /nse|bse|india|nifty|sensex|nyse|nasdaq|us market|s&p|stock|market|brief/i.test(t);
+  const streamId = finance ? "finance" : "general";
+  // Prefer a user-configured pipeline for this stream (first match), else heuristic agents.
+  const pipe = pipelines.find((p) => p.stream === streamId);
+  if (pipe?.agents?.length) return { stream: streamId, agents: pipe.agents, pipeline: pipe.id };
+  const hasStream = streams.some((s) => s.id === streamId);
+  const agents = finance
+    ? (/nyse|nasdaq|us market/i.test(t) ? ["finance-us"] : ["finance-india"])
+    : /summar|brief|tldr|compress/i.test(t) ? ["summarizer"]
+    : /review|diff|patch|code/i.test(t) ? ["coder"]
+    : ["assistant"];
+  return { stream: hasStream ? streamId : (streams[0]?.id || "general"), agents, pipeline: null };
 }
 
 /** Pipeline for a task = the agents assigned to it (stored on the task row). */
 export function dividerPipeline(taskTypeOrAgents) {
   if (Array.isArray(taskTypeOrAgents)) return taskTypeOrAgents;
+  if (taskTypeOrAgents && Array.isArray(taskTypeOrAgents.agents)) return taskTypeOrAgents.agents;
   if (typeof taskTypeOrAgents === "string" && AGENT_PIPELINE.includes(taskTypeOrAgents)) return [taskTypeOrAgents];
   return ["assistant"];
 }

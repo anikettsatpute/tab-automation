@@ -108,6 +108,7 @@ export function getState() {
     tools: loadJson("config/tools.json", { servers: [], customTools: [] }),
     discord: loadJson("config/discord.json", { mainChannelId: "", extraChannels: [], ownerUserId: "" }),
     workflows: loadJson("config/workflows.json", { workflows: [] }),
+    streams: loadJson("config/streams.json", { streams: [], pipelines: [] }),
     envKeys: {
       DISCORD_BOT_TOKEN: mask(env.DISCORD_BOT_TOKEN),
       AZURE_OPENAI_ENDPOINT: env.AZURE_OPENAI_ENDPOINT || "",

@@ -33,9 +33,12 @@ export function loadConfig() {
   const providersDoc = readJsonOptional("config/providers.json", { providers: [] });
   const toolsDoc = readJsonOptional("config/tools.json", { servers: [] });
   const discordDoc = readJsonOptional("config/discord.json", {});
+  const streamsDoc = readJsonOptional("config/streams.json", { streams: [], pipelines: [] });
 
   const agents = new Map((agentsDoc.agents ?? []).map((a) => [a.id, a]));
   const workflows = workflowsDoc.workflows ?? [];
+  const streams = streamsDoc.streams ?? [];
+  const pipelines = streamsDoc.pipelines ?? [];
 
   const cfg = {
     root,
@@ -63,6 +66,8 @@ export function loadConfig() {
     mcpServers: toolsDoc.servers ?? [],
     agents,
     workflows,
+    streams,
+    pipelines,
   };
 
   const errors = [];
@@ -100,6 +105,26 @@ export function loadConfig() {
       }
     };
     walk(w.steps);
+  }
+  // streams + task pipelines: every referenced agent must exist
+  const streamIds = new Set();
+  for (const s of streams) {
+    if (!s.id) errors.push("A stream is missing id");
+    else if (streamIds.has(s.id)) errors.push(`Duplicate stream id: ${s.id}`);
+    else streamIds.add(s.id);
+    for (const a of s.agents ?? []) {
+      if (!agents.has(a)) errors.push(`Stream ${s.id}: unknown agent '${a}'`);
+    }
+  }
+  const pipeIds = new Set();
+  for (const p of pipelines) {
+    if (!p.id) errors.push("A pipeline is missing id");
+    else if (pipeIds.has(p.id)) errors.push(`Duplicate pipeline id: ${p.id}`);
+    else pipeIds.add(p.id);
+    if (p.stream && !streamIds.has(p.stream)) errors.push(`Pipeline ${p.id}: unknown stream '${p.stream}'`);
+    for (const a of p.agents ?? []) {
+      if (!agents.has(a)) errors.push(`Pipeline ${p.id}: unknown agent '${a}'`);
+    }
   }
 
   return { cfg, errors };

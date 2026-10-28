@@ -1,0 +1,46 @@
+{
+  "streams": [
+    {
+      "id": "general",
+      "name": "General",
+      "description": "Default stream for ad-hoc tasks and assistant chats.",
+      "agents": ["assistant", "summarizer", "coder"]
+    },
+    {
+      "id": "finance",
+      "name": "Finance",
+      "description": "Market briefings — NSE/BSE + NYSE/NASDAQ via finance agents.",
+      "agents": ["finance-india", "finance-us", "summarizer"]
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "quick-answer",
+      "name": "Quick answer",
+      "description": "Single assistant pass for simple questions.",
+      "stream": "general",
+      "agents": ["assistant"]
+    },
+    {
+      "id": "review-fix",
+      "name": "Review then fix",
+      "description": "Coder reviews, assistant summarizes the fix.",
+      "stream": "general",
+      "agents": ["coder", "assistant"]
+    },
+    {
+      "id": "finance-brief",
+      "name": "Finance brief",
+      "description": "Finance agent briefs, summarizer compresses for Discord.",
+      "stream": "finance",
+      "agents": ["finance-india", "summarizer"]
+    },
+    {
+      "id": "finance-us-brief",
+      "name": "US finance brief",
+      "description": "US finance agent briefs, summarizer compresses for Discord.",
+      "stream": "finance",
+      "agents": ["finance-us", "summarizer"]
+    }
+  ]
+}

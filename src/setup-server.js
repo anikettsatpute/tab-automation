@@ -785,6 +785,31 @@ app.post("/api/workflows", async (c) => {
   return c.json({ saved: true, count: (workflows ?? []).length });
 });
 
+// ---- API: streams + task pipelines (reference: Streams step — repo replacement) ----
+// Streams group agents (general, finance...). Pipelines are user-configured
+// agent->agent chains per stream. The divider + request intake read these.
+app.post("/api/streams", async (c) => {
+  const { streams, pipelines } = await c.req.json().catch(() => ({}));
+  const agentsDoc = loadJson("config/agents.json", { agents: [] });
+  const agentIds = new Set((agentsDoc.agents ?? []).map((a) => a.id));
+  for (const s of streams ?? []) {
+    if (!s.id) return c.json({ error: "stream missing id" }, 400);
+    for (const a of s.agents ?? []) {
+      if (!agentIds.has(a)) return c.json({ error: `stream ${s.id}: unknown agent '${a}'` }, 400);
+    }
+  }
+  const streamIds = new Set((streams ?? []).map((s) => s.id));
+  for (const p of pipelines ?? []) {
+    if (!p.id) return c.json({ error: "pipeline missing id" }, 400);
+    if (p.stream && !streamIds.has(p.stream)) return c.json({ error: `pipeline ${p.id}: unknown stream '${p.stream}'` }, 400);
+    for (const a of p.agents ?? []) {
+      if (!agentIds.has(a)) return c.json({ error: `pipeline ${p.id}: unknown agent '${a}'` }, 400);
+    }
+  }
+  saveJson("config/streams.json", { streams: streams ?? [], pipelines: pipelines ?? [] });
+  return c.json({ saved: true, streams: (streams ?? []).length, pipelines: (pipelines ?? []).length });
+});
+
 // ---- API: validate ----
 app.post("/api/validate", (c) => {
   const r = spawnSync(process.execPath, ["src/validate.js"], { cwd: root, encoding: "utf-8" });

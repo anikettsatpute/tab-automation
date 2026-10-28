@@ -102,6 +102,7 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
         ok: true,
         providers: loadJson("config/providers.json", { defaultProvider: "azure", providers: [] }),
         agents: loadJson("config/agents.json", { agents: [] }),
+        streams: loadJson("config/streams.json", { streams: [], pipelines: [] }),
         kv: { providerDefault: getConfig(root, "provider.default", ""), modelDefault: getConfig(root, "model.default", "") },
       });
     } catch (err) { return c.json({ error: err.message }, 500); }
@@ -352,24 +353,34 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  // Submit a request: divider picks OUR agents (not spec task types).
-  // mode=request -> divider picks agents; mode=direct -> agents from body.
+  // Submit a request: divider picks a stream + agents (not spec task types).
+  // mode=request -> divider picks stream/pipeline; mode=direct -> stream/agents from body.
   // Each step spawns a Muse session; session JSON is reconciled into the DB by the loop.
   app.post("/api/control/requests", async (c) => {
     try {
-      const { text, mode, repo, agents } = await c.req.json().catch(() => ({}));
+      const { text, mode, stream, agents, pipeline: pipelineId } = await c.req.json().catch(() => ({}));
       if (!text || !String(text).trim()) return c.json({ error: "text required" }, 400);
-      const { divideGoal, dividerPipeline, AGENT_PIPELINE } = await import("./orchestrator.js");
+      const { divideGoal, dividerPipeline } = await import("./orchestrator.js");
       const { runWorkflow } = await import("./workflow.js");
+      const streamsDoc = loadJson("config/streams.json", { streams: [], pipelines: [] });
+      const agentIds = new Set((cfg.agents ? [...cfg.agents.keys()] : []));
       const cleanMode = mode === "direct" ? "direct" : "request";
-      const picked = cleanMode === "direct"
-        ? (Array.isArray(agents) ? agents.filter((a) => AGENT_PIPELINE.includes(a)) : [])
-        : divideGoal(text);
+      let picked, streamId;
+      if (cleanMode === "direct") {
+        streamId = stream || streamsDoc.streams[0]?.id || "general";
+        const pipe = (streamsDoc.pipelines || []).find((p) => p.id === (pipelineId || ""));
+        picked = Array.isArray(agents) ? agents.filter((a) => agentIds.has(a))
+          : pipe?.agents?.filter((a) => agentIds.has(a)) || [];
+      } else {
+        const d = divideGoal(text, streamsDoc);
+        picked = d.agents;
+        streamId = d.stream;
+      }
       const pipeline = dividerPipeline(picked.length ? picked : ["assistant"]);
-      const requestId = fileRequest(root, { text: String(text).slice(0, 4000), mode: cleanMode, repo: repo || "tab-automation", taskType: pipeline.join(","), pipeline });
+      const requestId = fileRequest(root, { text: String(text).slice(0, 4000), mode: cleanMode, repo: streamId, taskType: pipeline.join(","), pipeline });
       // Enqueue as a real workflow run: divider step + one agent session per picked agent.
       const steps = [
-        { id: "divider", type: "log", text: `Divider: mode=${cleanMode} picked agents ${pipeline.join(" -> ")}` },
+        { id: "divider", type: "log", text: `Divider: mode=${cleanMode} stream=${streamId} agents ${pipeline.join(" -> ")}` },
         ...pipeline.slice(0, 6).map((agent, i) => ({
           id: `stage-${i + 1}-${agent}`,
           type: "agent", agent,
@@ -377,11 +388,11 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
         })),
       ];
       const wf = { id: `request-${requestId}`, name: `Request ${requestId}`, trigger: { type: "manual" }, steps };
-      const trigger = { kind: "dashboard-request", text: String(text).slice(0, 1000), user: "dashboard", requestId, agents: pipeline };
+      const trigger = { kind: "dashboard-request", text: String(text).slice(0, 1000), user: "dashboard", requestId, stream: streamId, agents: pipeline };
       const ctx = await runWorkflow(cfg, { log, sendDiscord: async () => {} }, wf, trigger);
       try { linkRequestRun(root, requestId, ctx._runId || null); } catch {}
-      try { writeLog(root, { level: "info", source: "dashboard-request", message: `request ${requestId} -> agents ${pipeline.join("->")}`, runId: ctx._runId || null }); } catch {}
-      return c.json({ ok: true, requestId, agents: pipeline, pipeline, runId: ctx._runId || null });
+      try { writeLog(root, { level: "info", source: "dashboard-request", message: `request ${requestId} [${streamId}] -> agents ${pipeline.join("->")}`, runId: ctx._runId || null }); } catch {}
+      return c.json({ ok: true, requestId, stream: streamId, agents: pipeline, pipeline, runId: ctx._runId || null });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
   app.get("/api/control/requests", (c) => {
