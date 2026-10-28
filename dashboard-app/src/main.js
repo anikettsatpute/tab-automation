@@ -16,8 +16,12 @@ const S = {
   q: "", auto: true, timer: null, logLevel: "", showReq: false, reqMode: "request",
   reqType: "let_divider_choose", reqRepo: "tab-automation", reqBusy: false, reqMsg: "",
   expandedSteps: new Set(), expandedVariants: new Set(), rerunText: "",
-  brainSel: null, brainTab: "details", flowSel: null,
-  cmdOpen: false, cmdIdx: 0,
+  brainSel: null, brainTab: "details", brainQ: "", flowSel: null,
+  flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "",
+  cmdOpen: false, cmdIdx: 0, theme: "dark",
+  groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all",
+  showCtx: false, sessIdx: 0, diagFull: false, reqChanges: "", appendTitle: "",
+  paused: false,
 };
 // PRD 4.5 task-type taxonomy (reference: TASK_TYPES_CONFIG in spec state-machine)
 const TASK_TYPE_OPTS = [
@@ -68,40 +72,48 @@ const statusBadge = (st) => {
   return `<span class="tag ${cls}">${esc(label)}</span>`;
 };
 
-// ---------- sidebar (PRD 4.2) ----------
+// ---------- sidebar (PRD 4.2: nav + counts + status filter) ----------
 const NAV = [
   ["board", "Board"], ["assistant", "Assistant"], ["brain", "Brain messages"], ["todos", "TODOs"],
   ["automations", "Automations"], ["config", "Configuration"], ["ado", "ADO items"], ["requests", "Requests"],
   ["outbox", "Outbox"], ["activity", "Activity"], ["retro", "Retro"],
 ];
+const NAV_COUNT = () => ({
+  board: S.tasks.length, brain: (S.brain?.messages?.length ?? S.brain?.metrics?.incoming ?? 0),
+  todos: S.todos.length, automations: S.flows.length, requests: S.requests.length,
+  outbox: S.outbox.length, activity: S.activity.length,
+});
 function sidebar() {
   const t = S.ov?.totals || {};
+  const counts = NAV_COUNT();
+  const queued = Math.max(0, (t.runs || 0) - (t.running || 0) - (t.done || 0) - (t.failed || 0));
+  const stats = [["Queued", queued, ""], ["Running", t.running ?? 0, "run"], ["Plan review", 0, ""], ["Size review", 0, ""], ["Your review", 0, ""], ["PR review", S.tasks.filter((r) => r.prUrl).length, "review"], ["Blocked", t.failed ?? 0, "bad"], ["Done", t.done ?? 0, "ok"]];
   return `
   <aside class="side">
     <div class="brand"><div class="logo">🤖</div><div><b>OrchestratorLoop</b><span>Task control plane</span></div></div>
     <button class="btn primary block" id="newtask">+ New task</button>
-    <nav>${NAV.map(([v, l]) => `<button class="nav ${S.view === v ? "on" : ""}" data-view="${v}">${esc(l)}</button>`).join("")}</nav>
+    <nav>${NAV.map(([v, l]) => `<button class="nav ${S.view === v ? "on" : ""}" data-view="${v}"><span>${esc(l)}</span>${counts[v] ? `<span class="ncount">${counts[v]}</span>` : ""}</button>`).join("")}</nav>
     <div class="sstat"><h4>STATUS</h4>
-      <div><i class="dot"></i>Queued <b>${(t.runs || 0) - (t.running || 0) - (t.done || 0) - (t.failed || 0)}</b></div>
-      <div><i class="dot run"></i>Running <b>${t.running ?? 0}</b></div>
-      <div><i class="dot ok"></i>Done <b>${t.done ?? 0}</b></div>
-      <div><i class="dot bad"></i>Blocked <b>${t.failed ?? 0}</b></div>
+      ${stats.map(([l, c, cls]) => `<div class="srow2 ${S.statusFilter === l ? "on" : ""}" data-statusf="${esc(l)}"><i class="dot ${cls}"></i>${esc(l)} <b>${c}</b></div>`).join("")}
     </div>
+    <div class="spal"><span>⌘ Command palette</span><kbd>⌘K</kbd></div>
   </aside>`;
 }
 
-// ---------- topbar (PRD 4.1) ----------
+// ---------- topbar (PRD 4.1: search, commands, sweep, auto, pause, refresh, theme, live) ----------
 function topbar() {
   const t = S.ov?.totals || {};
   return `
   <header class="top">
     <div class="brand sm"><div class="logo">⚡</div><div><b>OrchestratorLoop</b><span>Task control plane</span></div></div>
+    <span class="ws">tab-automation</span>
     <input id="fq" placeholder="Filter tasks ( / )" value="${esc(S.q)}">
-    <button class="btn sm" id="cmds">⌘ Commands</button>
+    <button class="btn sm" id="cmds">⌘ Commands <kbd>⌘K</kbd></button>
     <button class="btn sm" id="sweep">🧹 Sweep PRs${t.failed ? ` (${t.failed})` : ""}</button>
     <button class="btn sm ${S.auto ? "on" : ""}" id="autobtn">⚡ Auto</button>
-    <button class="btn sm" id="resume">${S.auto ? "⏸ Pause" : "▶ Resume"}</button>
-    <button class="btn sm ghost" id="refresh">🔄</button>
+    <button class="btn sm" id="resume">${S.paused ? "▶ Resume" : "⏸ Pause"}</button>
+    <button class="btn sm ghost" id="refresh" title="Refresh now">🔄</button>
+    <button class="btn sm ghost" id="theme">${S.theme === "dark" ? "☀️" : "🌙"}</button>
     <span class="spacer"></span>
     <span class="pill ok"><span class="pulse"></span>Live</span>
   </header>`;
@@ -119,21 +131,30 @@ function attentionBanners() {
 
 function boardView() {
   let list = (S.tasks || []).filter((r) =>
-    !S.q || ((r.title || "") + " " + r.workflow + " " + (r.branch || "") + " " + r.id).toLowerCase().includes(S.q.toLowerCase()));
-  if (S.boardTab === "runs") list = [...list].sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+    !S.q || ((r.title || "") + " " + r.workflow + " " + (r.branch || "") + " " + r.id + " " + (r.repository || "")).toLowerCase().includes(S.q.toLowerCase()));
+  if (S.statusFilter === "Blocked") list = list.filter((r) => r.status === "failed" || r.blockedReason);
+  else if (S.statusFilter === "Running") list = list.filter((r) => r.status === "running");
+  else if (S.statusFilter === "Done") list = list.filter((r) => r.status === "done");
+  else if (S.statusFilter === "Queued") list = list.filter((r) => r.status === "queued");
+  else if (S.statusFilter === "PR review") list = list.filter((r) => r.prUrl);
+  if (S.sortBy === "recent") list = [...list].sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+  else list = [...list].sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const sel = S.detail;
   return `
   ${attentionBanners()}
   <div class="bhead"><h2>Board <span class="hint">${list.length} of ${S.tasks.length} tasks</span></h2>
     <div class="btabs"><button class="tab ${S.boardTab === "tasks" ? "on" : ""}" data-btab="tasks">Tasks</button>
-    <button class="tab ${S.boardTab === "runs" ? "on" : ""}" data-btab="runs">Automation runs</button></div></div>
+    <button class="tab ${S.boardTab === "runs" ? "on" : ""}" data-btab="runs">Automation runs</button></div>
+    <span class="spacer"></span>
+    <select id="sortby" class="sel"><option value="recent" ${S.sortBy === "recent" ? "selected" : ""}>Recent activity</option><option value="id" ${S.sortBy === "id" ? "selected" : ""}>By Task ID</option></select>
+  </div>
   <div class="board2">
     <div class="blist">
       ${list.map((r) => `
       <div class="bcard ${S.sel === r.id ? "sel" : ""}" data-sel="${esc(r.id)}">
         <div class="btop">${statusBadge(r.status)} <span class="hint">#${esc(r.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(r.startedAt)}</span></div>
         <div class="btitle">${esc((r.title || r.workflow || "").slice(0, 100))}</div>
-        <div class="bmeta"><span class="kbd">${esc(r.repository || "tab-automation")}</span> <span class="kbd">${esc(r.branch || "")}</span></div>
+        <div class="bmeta"><span class="kbd">${esc(r.repository || "tab-automation")}</span> <span class="kbd">${esc(r.taskType || r.kind || "")}</span> <span class="kbd">⑂ ${esc((r.branch || "").slice(0, 40))}</span></div>
         <div class="bmeta"><span class="hint">${r.progress.completed}/${r.progress.total}</span>
           ${r.tokens ? `<span class="hint">🎟${Number(r.tokens).toLocaleString()}</span>` : ""} ${r.toolCalls ? `<span class="hint">🔧${r.toolCalls}</span>` : ""}
           ${r.commentsCount ? `<span class="hint">💬${r.commentsCount}</span>` : ""} ${r.prUrl ? `<span class="hint">🔀 PR</span>` : ""}</div>
@@ -143,38 +164,64 @@ function boardView() {
   </div>`;
 }
 
-// ---------- detail drawer (PRD 4.4) ----------
+// ---------- detail drawer (PRD 4.4: header, pipeline, toolbar, 5 tabs) ----------
+function pipeStages(d) {
+  // Pipeline visualizer: derive stage names from steps (Planner/Coder/Validator/Open PR style)
+  const steps = d.steps || [];
+  return steps.map((s, i) => {
+    const done = s.status === "ok" || s.status === "done";
+    const run = s.status === "running";
+    const bad = s.status === "failed";
+    return `<div class="pnode ${done ? "ok" : bad ? "bad" : run ? "run" : ""}"><b>${esc((s.agent || s.id || `Stage ${i + 1}`).slice(0, 22))}</b><span>${done ? "DONE" : bad ? "FAILED" : run ? "RUNNING" : "PENDING"}</span></div>`;
+  }).join("");
+}
 function detailPane(d) {
   const tabs = [["overview", "Overview"], ["steps", `Steps (${d.steps.length})`], ["activity", `Activity (${d.activity.length})`], ["diagrams", "Diagrams"], ["sessions", `Sessions (${d.sessions.length})`]];
   const pct = d.progress.total ? Math.round(d.progress.completed / d.progress.total * 100) : 0;
+  const statusDesc = d.prUrl ? "A pull request is open and waiting on your review." : d.status === "failed" ? "Blocked — needs human review." : d.status === "done" ? "Completed." : "Running through the pipeline.";
   let body = "";
-  if (S.detailTab === "overview") body = `<div class="endgoal">${esc(d.endGoal?.slice(0, 1200) || "No description.")}</div>${d.error ? `<div class="status bad">${esc(d.error)}</div>` : ""}${d.blockedReason && d.status === "failed" ? `<div class="status bad">Blocked: ${esc(d.blockedReason.slice(0, 300))}</div>` : ""}`;
+  if (S.detailTab === "overview") body = `<div class="endgoal">${esc(d.endGoal?.slice(0, 2000) || "No description.")}</div>
+    <div class="row"><span class="kbd">Repo: ${esc(d.repository)}</span><span class="kbd">⑂ ${esc(d.branch)}</span><span class="kbd">${esc(d.taskType)}</span></div>
+    ${d.error ? `<div class="status bad">${esc(d.error)}</div>` : ""}${d.blockedReason && d.status === "failed" ? `<div class="status bad">Blocked: ${esc(d.blockedReason.slice(0, 300))}</div>` : ""}
+    ${(d.comments || []).length ? `<h4>Comments (${d.comments.length})</h4>` + d.comments.map((cm) => `<div class="appr"><div class="row"><b>${esc(cm.author)}</b><span class="hint">${esc(String(cm.created_at || "").slice(0, 16).replace("T", " "))}</span></div><p class="dim">${esc(cm.text)}</p></div>`).join("") : ""}`;
   else if (S.detailTab === "steps") body = d.steps.map((s, i) => `
     <div class="stepcard ${s.status === "failed" ? "bad" : ""}">
       <div class="shead"><span class="snum">${i + 1}</span><b>${esc(s.id)}</b> <span class="kbd">${esc(s.type)}</span> ${s.agent ? `<span class="kbd">${esc(s.agent)}</span>` : ""}<span class="spacer"></span>${statusBadge(s.status === "ok" ? "done" : s.status)}<button class="btn ghost sm" data-xstep="${i}">›</button></div>
       ${S.expandedSteps.has(i) ? `<div class="sbody"><p class="dim">${esc(s.text.slice(0, 800))}</p>
         <button class="btn sm ghost" data-xvar="${i}">▶ Full prompt sent to the agent — variant 1</button>
         ${S.expandedVariants.has(i) ? `<pre class="out">${esc(s.text.slice(0, 2000))}</pre>${s.output ? `<pre class="out">${esc(s.output.slice(0, 1000))}</pre>` : ""}` : ""}
+        <button class="btn sm ghost" data-ctx="${i}">📄 ${S.showCtx ? "Hide context sent" : "View context sent"}</button>
+        ${S.showCtx ? `<pre class="out">context-${i + 1}.md · run ${esc(d.id)} · agent ${esc(s.agent || "—")}\n${esc(s.text.slice(0, 1200))}</pre>` : ""}
         <label class="fld"><span>Re-run from this step</span><textarea id="rerun-${i}" rows="2" placeholder="- What should this step do differently? (optional)"></textarea></label>
-        <p class="hint">Markdown — one '-' bullet per point. Earlier steps preserved; this step + downstream reset.</p>
+        <p class="hint">Markdown — one '-' bullet per point. Earlier steps preserved; this step + downstream reset. Restart budget survives; PR link survives.</p>
         <button class="btn primary sm" data-rqstep="${i}">🔄 Re-queue from step ${i + 1}</button></div>` : ""}
     </div>`).join("") || `<p class="hint">No steps</p>`;
   else if (S.detailTab === "activity") body = `<div class="logbox">${d.activity.map((a) => `
     <div class="lrow ${a.status === "failed" ? "error" : "info"}"><span class="lt">${esc(String(a.at || "").slice(5, 16).replace("T", " "))}</span>
-    <span class="ltag">${esc(a.action)}</span><span>${esc(String(a.detail || "").slice(0, 220))}</span></div>`).join("") || `<p class="hint">No activity</p>`}</div>`;
+    <span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 220))}</span></div>`).join("") || `<p class="hint">No activity</p>`}</div>`;
   else if (S.detailTab === "diagrams") body = `<div class="pipe">${d.diagram.map((n) => `
-    <div class="pnode ${d.status === "failed" ? "bad" : "ok"}"><b>${esc(n.label)}</b><span>${esc(n.type)}</span></div>`).join("") || `<p class="hint">No diagram</p>`}</div>
-    <p class="hint">Scroll to pan · Ctrl+scroll to zoom</p>`;
-  else body = `<div class="sess">${d.sessions.map((s) => `
-    <div class="srow"><b>${esc(s.agent)}</b><span class="kbd">${esc(s.model)}</span><span class="hint">${esc(s.workspace)} · ${esc(s.context)} · ${s.steps} steps</span></div>`).join("") || `<p class="hint">No sessions</p>`}</div>`;
+    <div class="pnode ${n.status === "failed" ? "bad" : "ok"}"><b>${esc(n.label)}</b><span>${esc(n.type)}${n.agent ? " · " + esc(n.agent) : ""}</span></div>`).join("") || `<p class="hint">No diagram</p>`}</div>
+    <p class="hint">Scroll to pan · Ctrl+scroll to zoom · <button class="btn sm ghost" id="diagfull">⤢ Open</button></p>
+    ${S.diagFull ? `<div class="modal"><div class="mbox wide"><div class="dhead"><b>Diagram — ${esc(d.id.slice(0, 8))}</b><span class="spacer"></span><button class="btn ghost sm" id="diagx">✕</button></div><div class="pipe">${d.diagram.map((n) => `<div class="pnode ${n.status === "failed" ? "bad" : "ok"}"><b>${esc(n.label)}</b><span>${esc(n.type)}</span></div>`).join("")}</div></div></div>` : ""}`;
+  else {
+    const sess = d.sessions || [];
+    const cur = sess[Math.min(S.sessIdx, Math.max(0, sess.length - 1))] || null;
+    body = `<div class="sess">
+      ${sess.length > 1 ? `<label class="fld"><span>Select session (${sess.length})</span><select id="sesssel">${sess.map((s, i) => `<option value="${i}" ${i === S.sessIdx ? "selected" : ""}>${esc(s.agent)} · ${esc(s.model || "default")} · ${esc(s.status || "")}</option>`).join("")}</select></label>` : ""}
+      ${cur ? `<div class="srow"><b>${esc(cur.agent)}</b><span class="kbd">${esc(cur.model || "default")}</span><span class="hint">${esc(cur.workspace || "tab-automation")} · ${esc(cur.context || "")} · ${cur.steps ?? 1} steps</span></div>
+      <pre class="out">Runner: ${esc(cur.runner || "tab-automation")}\nSession: ${esc(cur.sessionUuid || cur.id || "—")}\nAgent: ${esc(cur.agent)} · Model: ${esc(cur.model || "default")}\nWorkspace: ${esc(cur.workspace || "tab-automation")}\nTranscript: ${esc(cur.context || "current session")}</pre>` : ""}
+      ${sess.map((s) => `<div class="srow"><b>${esc(s.agent)}</b><span class="kbd">${esc(s.model || "default")}</span><span class="hint">${esc(s.workspace || "")} · ${esc(s.context || "")} · ${s.steps ?? 1} steps</span></div>`).join("") || `<p class="hint">No sessions</p>`}</div>`;
+  }
   return `
   <div class="dhead"><span class="mono">#${esc(d.id.slice(0, 6))}</span> ${statusBadge(d.status)}<span class="spacer"></span><button class="btn ghost sm" id="dclose">✕</button></div>
   <div class="dtitle">${esc((d.title || "").slice(0, 120))}</div>
-  <p class="hint">${d.prUrl ? `PR open — <a href="${esc(d.prUrl)}" target="_blank">review</a>` : d.status === "failed" ? "Blocked — needs attention." : d.status === "done" ? "Completed." : "In progress."}</p>
+  <p class="hint">${esc(statusDesc)}</p>
   <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div><div class="hint">${d.progress.completed}/${d.progress.total}</div>
+  <div class="pipe">${pipeStages(d)}</div>
   <div class="dact"><button class="btn sm primary" data-act="req-changes">Request changes</button><button class="btn sm" data-act="sweep">Sweep PR comments</button>
-    <button class="btn sm" data-act="done">Mark done</button>${d.prUrl ? `<a class="btn sm" href="${esc(d.prUrl)}" target="_blank">Open PR ↗</a>` : ""}
-    <button class="btn sm" data-rerun="${esc(d.workflow)}">Re-run</button><button class="btn sm danger" data-act="del">Delete</button></div>
+    <button class="btn sm" data-act="done">✓ Mark done</button>${d.prUrl ? `<a class="btn sm" href="${esc(d.prUrl)}" target="_blank">Open PR ↗</a>` : ""}
+    <button class="btn sm" data-act="append">+ Append task</button><button class="btn sm" data-act="requeue">Re-queue</button><button class="btn sm danger" data-act="del">🗑 Delete</button></div>
+  <div id="actbox"></div>
   <nav class="tabs">${tabs.map(([v, l]) => `<button class="tab ${S.detailTab === v ? "on" : ""}" data-dtab="${v}">${esc(l)}</button>`).join("")}</nav>
   <div class="dbody">${body}</div>`;
 }
@@ -194,19 +241,39 @@ function toolsView() {
   <td>${t.calls ?? 0}</td><td>${t.avgMs ?? 0}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 function brainView() {
-  const b = S.brain || { messages: [], poller: {} };
-  const msgs = (b.messages || []).slice(0, 40);
-  const sel = S.brainSel ? msgs.find((m) => m.id === S.brainSel) : null;
+  const b = S.brain || { messages: [], poller: {}, metrics: {} };
+  const m = b.metrics || {};
+  const all = (b.messages || []).filter((x) =>
+    !S.brainQ || ((x.messageText || x.text || "") + " " + (x.sender || "") + " " + (x.jobId || x.id || "")).toLowerCase().includes(S.brainQ.toLowerCase()));
+  const msgs = all.slice(0, 40);
+  const sel = S.brainSel ? all.find((x) => (x.id || x.jobId) === S.brainSel) || msgs.find((x) => (x.id || x.jobId) === S.brainSel) : null;
+  const txt = (x) => x.messageText || x.text || "";
+  const ts = (x) => x.receivedAt || x.ts || "";
+  const st = (x) => x.processingStatus || x.status || "queued";
   return `<div class="card"><h3>Brain messages <span class="hint">Teams / Brain</span></h3>
-  <p class="hint">Poller ${b.poller?.enabled ? "enabled" : "off"} · interval ${b.poller?.intervalMin || 2} min · Completion updates ${b.poller?.completionUpdates ? "on" : "off"} · Incoming ${msgs.length}</p>
+  <p class="hint">Poller ${b.poller?.enabled ? "enabled" : "off"} · interval ${b.poller?.intervalMin || 2} min · Completion updates ${b.poller?.completionUpdates ? "on" : "off"} · channel ${esc(b.poller?.channel || "discord")}</p>
+  <div class="mrow">
+    <span class="m">Incoming <b>${m.incoming ?? msgs.length}</b></span><span class="m">Queued <b>${m.queued ?? 0}</b></span>
+    <span class="m">Running <b>${m.running ?? 0}</b></span><span class="m bad">Failed / interrupted <b>${m.failed ?? 0}</b></span>
+    <span class="m">Outbox <b>${S.outbox.length}</b></span><span class="m">Sent <b>${m.replied ?? 0}</b></span>
+  </div>
+  <p class="hint">Last scan: ${esc(b.poller?.lastScan ? String(b.poller.lastScan).slice(0, 19).replace("T", " ") : "—")}</p>
+  <div class="chatbox"><input id="brain-q" placeholder="Search message, sender, chat or job ID" value="${esc(S.brainQ)}"></div>
   <div class="tblwrap"><table class="tbl"><thead><tr><th>Received</th><th>Sender / source</th><th>Incoming message</th><th>Processing</th><th>Outbox</th></tr></thead><tbody>
-  ${msgs.map((m) => `<tr data-brain="${esc(m.id)}" style="cursor:pointer;${S.brainSel === m.id ? "background:var(--acc-soft);" : ""}"><td class="dim">${esc(String(m.ts || "").slice(0, 16).replace("T", " "))}</td>
-  <td>${esc(m.sender)}<br><span class="hint">${esc(m.channelId || "discord")} · ${esc(m.kind || "")}</span></td>
-  <td class="dim">${esc(String(m.text || "").slice(0, 160))}</td><td>${esc(m.status)}</td><td class="hint">${m.status === "replied" ? "1 sent" : "—"}</td></tr>`).join("") || `<tr><td colspan="5" class="hint">No messages</td></tr>`}
+  ${msgs.map((x) => { const id = x.id || x.jobId; return `<tr data-brain="${esc(id)}" style="cursor:pointer;${S.brainSel === id ? "background:var(--acc-soft);" : ""}"><td class="dim">${esc(String(ts(x)).slice(0, 16).replace("T", " "))}</td>
+  <td>${esc(x.sender)}<br><span class="hint">${esc(x.source || x.channelId || "discord")}</span></td>
+  <td class="dim">${esc(String(txt(x)).slice(0, 160))}<br><span class="hint">${esc(x.jobId || x.id || "")}</span></td>
+  <td><span class="tag ${st(x) === "failed" ? "bad" : st(x) === "reply_generated" || st(x) === "replied" ? "ok" : "run"}">${esc(st(x))}</span></td>
+  <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5" class="hint">No messages</td></tr>`}
   </tbody></table></div>
-  ${sel ? `<div class="appr"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id)}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx">✕</button></div>
+  ${sel ? `<div class="appr"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx">✕</button></div>
   <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">Message details</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">Session</button></div>
-  ${S.brainTab === "details" ? `<p class="dim">From <b>${esc(sel.sender)}</b> at ${esc(String(sel.ts || "").slice(0, 19).replace("T", " "))} · status ${esc(sel.status)}</p><div class="endgoal">${esc(String(sel.text || "").slice(0, 2000))}</div>` : `<p class="dim">Runner: Discord poller · channel ${esc(sel.channelId || "—")} · kind ${esc(sel.kind || "—")}</p><pre class="out">${esc(String(sel.text || "").slice(0, 2000))}</pre>`}</div>` : ""}</div>`;
+  ${S.brainTab === "details" ? `<div class="grid2"><span>Job ID</span><span class="kbd">${esc(sel.jobId || sel.id || "")}</span><span>Actor ID</span><span class="kbd">${esc(sel.actorId || "—")}</span><span>Conversation</span><span class="kbd">${esc(sel.conversationId || sel.channelId || "—")}</span><span>Updated</span><span>${esc(String(ts(sel)).slice(0, 19).replace("T", " "))}</span></div>
+  ${sel.linkedTaskId ? `<p class="dim">Linked work: <span class="kbd">${esc(sel.linkedTaskId)}</span></p>` : ""}
+  ${sel.processingError ? `<div class="status bad">${esc(sel.processingError)}</div>` : ""}
+  <p class="dim">From <b>${esc(sel.sender)}</b> · status ${esc(st(sel))}</p><div class="endgoal">${esc(String(txt(sel)).slice(0, 2000))}</div>
+  ${sel.requestText ? `<p class="dim">Request:</p><pre class="out">${esc(String(sel.requestText).slice(0, 1000))}</pre>` : ""}`
+  : `<p class="dim">Runner: Discord poller · channel ${esc(sel.channelId || sel.conversationId || "—")}</p><pre class="out">${esc(String(sel.sessionLog || txt(sel)).slice(0, 2000))}</pre>`}</div>` : ""}</div>`;
 }
 function requestsView() {
   return `<div class="card"><h3>Requests <span class="hint">${S.requests.length} intake</span></h3>
@@ -233,14 +300,53 @@ function retroView() {
   <h3>Delivery velocity</h3><div class="logbox">${(r.byDay || []).map((d) => `<div class="lrow info"><span class="lt">${esc(d.d)}</span><span class="ltag">${d.c} runs</span></div>`).join("")}</div></div>`;
 }
 function flowsView() {
-  return `<div class="card"><h3>Automations</h3>
-  ${(S.flows || []).map((f) => `<div class="appr"><b>${esc(f.id)}</b> <span class="kbd">${esc(f.trigger)}${f.cron ? " " + esc(f.cron) : ""}</span>
-  <span class="hint">${(f.steps || []).length} steps · last: ${esc(f.lastStatus || "never")}</span>
-  <div class="row"><button class="btn sm" data-runflow="${esc(f.id)}">Run</button><button class="btn sm ghost">Edit</button></div></div>`).join("") || `<p class="hint">No flows — add workflows in Setup Step 5.</p>`}</div>`;
+  const TPL = [
+    ["triage", "⚡ Triage every blocked task", "When a task blocks, an investigator agent reads the evidence and posts a summary to the outbox."],
+    ["nightly", "⚡ Nightly knowledge sweep", "A scheduled agent run — no task, no PR. Good for curation, reporting and housekeeping."],
+    ["onetime", "⚡ One-time: investigate, then fix", "A single run: an agent scopes the problem, a condition gates it, then a real task is enqueued."],
+  ];
+  const ed = S.flowEdit;
+  return `<div class="card"><h3>Automations <span class="hint">${S.flows.length} flow(s)</span></h3>
+  <p class="hint">Scheduled cron jobs, event-driven sweeps, and agent housekeeping routines.</p>
+  <h4>START FROM A TEMPLATE</h4>
+  <div class="agrid">${TPL.map(([id, t, d]) => `<div class="card tpl" data-tpl="${id}"><h3>${esc(t)}</h3><p class="dim">${esc(d)}</p></div>`).join("")}</div>
+  <h4>YOUR FLOWS</h4>
+  ${(S.flows || []).map((f) => `<div class="appr"><div class="row"><b>${esc(f.title || f.id)}</b><span class="spacer"></span>
+    <button class="btn sm ${f.enabled === false ? "" : "on"}" data-flowen="${esc(f.id)}">${f.enabled === false ? "Enable" : "Enabled"}</button>
+    <button class="btn sm ghost" data-flowdry="${esc(f.id)}">Dry run</button>
+    <button class="btn sm" data-runflow="${esc(f.id)}">▶ Run</button>
+    <button class="btn sm ghost" data-flowedit="${esc(f.id)}">Edit</button>
+    <button class="btn sm danger" data-flowdel="${esc(f.id)}">🗑</button></div>
+  <p class="hint">${esc(f.configFileName || f.id + ".json")} · trigger ${esc(f.trigger?.type || f.trigger || "manual")}${f.trigger?.cron ? " " + esc(f.trigger.cron) : f.cron ? " " + esc(f.cron) : ""} · ${(f.steps || []).length} steps · last: ${esc(f.state?.last_status || f.lastStatus || "never")}</p>
+  <div class="pipe">${(f.steps || []).map((s, i) => `<div class="pnode"><b>${i + 1}. ${esc(s.title || s.id || s.type)}</b><span>${esc(s.type || "")}</span></div>`).join("")}</div></div>`).join("") || `<p class="hint">No flows — start from a template above.</p>`}
+  <div class="row"><button class="btn sm primary" id="flownew">+ New flow</button></div></div>
+  ${ed ? `<div class="modal"><div class="mbox wide"><div class="dhead"><b>Edit flow '${esc(ed.id || ed.title || "new")}'</b><span class="spacer"></span><button class="btn ghost sm" id="flowx">✕</button></div>
+  <p class="hint">Steps run top to bottom. Reference earlier output with <span class="kbd">{{steps.&lt;id&gt;.output}}</span> and the trigger with <span class="kbd">{{trigger.&lt;field&gt;}}</span>.</p>
+  <h4>TRIGGER</h4>
+  <div class="row">${["manual", "schedule", "event"].map((t) => `<button class="btn sm ${S.flowTrig === t ? "primary" : "ghost"}" data-ftrig="${t}">${t === "manual" ? "Manual only" : t === "schedule" ? "On a schedule" : "On an event (rule)"}</button>`).join("")}</div>
+  ${S.flowTrig === "schedule" ? `<div class="row">${["Every hour", "Every weekday 9:00 AM", "Every day 6:00 PM", "Every Monday 8:30 AM", "Every N minutes"].map((p) => `<button class="btn sm ghost" data-preset="${esc(p)}">${esc(p)}</button>`).join("")}</div>
+  <div class="row"><label class="fld"><span>Time of day</span><input id="flow-time" value="${esc(S.flowTime)}"></label>
+  <label class="fld"><span>Days</span><div class="row">${["Every day", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<button class="btn sm ${S.flowDays.includes(d) ? "on" : "ghost"}" data-fday="${d}">${d}</button>`).join("")}</div></label></div>
+  <p class="hint">🕒 ${esc(S.flowDays.join(", "))} at ${esc(S.flowTime)} · cron <span class="kbd">${esc(S.flowCron || "(auto)")}</span> · <button class="btn sm ghost" id="flowcron">Edit cron</button></p>` : ""}
+  <h4>STEPS (${(ed.steps || []).length} steps)</h4>
+  <div class="row"><span class="hint">Add step:</span>${["run_agent", "create_task", "file_request", "notify", "condition", "run_automation", "wait"].map((t) => `<button class="btn sm ghost" data-fadd="${t}">${esc(t.replace(/_/g, " "))}</button>`).join("")}</div>
+  ${(ed.steps || []).map((s, i) => `<div class="appr"><div class="row"><span class="kbd">▶ ${i + 1}.</span><b>${esc(s.title || s.id || s.type)}</b><span class="kbd">${esc(s.type)}</span><span class="spacer"></span><button class="btn sm ghost" data-fup="${i}">^</button><button class="btn sm ghost" data-fdown="${i}">v</button><button class="btn sm danger" data-fdel="${i}">🗑</button></div><p class="hint">${esc(s.details || s.prompt || s.message || s.template || "")}</p></div>`).join("")}
+  <div class="row"><button class="btn sm ghost" id="flowcancel">Cancel</button><span class="spacer"></span><button class="btn sm primary" id="flowsave">Save flow</button></div>
+  </div></div>` : ""}`;
 }
 function todosView() {
-  return `<div class="card"><h3>TODOs (${S.todos.length})</h3>
-  ${S.todos.slice(0, 20).map((t) => `<div class="appr"><span class="tag">${esc(t.priority)}</span> ${esc(t.text)} <span class="hint">${esc(t.id)}</span></div>`).join("") || `<p class="hint">No TODOs yet</p>`}
+  const tabs = [["open", "Open"], ["done", "Done"], ["dismissed", "Dismissed"], ["all", "All"]];
+  let list = (S.todos || []).filter((t) =>
+    (S.todoTab === "all" || t.status === S.todoTab) &&
+    (!S.todoQ || (t.text || "").toLowerCase().includes(S.todoQ.toLowerCase())) &&
+    (S.todoSource === "all" || (t.project || "").includes(S.todoSource) || S.todoSource === "manual"));
+  return `<div class="card"><h3>TODOs</h3>
+  <div class="row">${tabs.map(([v, l]) => `<button class="tab ${S.todoTab === v ? "on" : ""}" data-ttab="${v}">${l}</button>`).join("")}<span class="spacer"></span><button class="btn sm primary" id="todo-new">+ New TODO</button></div>
+  <div class="row"><div class="chatbox" style="flex:1"><input id="todo-q" placeholder="Search TODOs" value="${esc(S.todoQ)}"></div>
+  <select id="todo-src" class="sel"><option value="all">All sources</option><option value="flow:" ${S.todoSource === "flow:" ? "selected" : ""}>Flows</option><option value="manual" ${S.todoSource === "manual" ? "selected" : ""}>Manual</option></select>
+  <select id="todo-sort" class="sel"><option>Newest first</option></select></div>
+  ${list.slice(0, 30).map((t) => `<div class="appr"><div class="row"><span class="tag">${esc(t.priority)}</span><span>${esc(t.text)}</span><span class="spacer"></span><span class="hint">${esc(t.id)} · ${esc(String(t.created_at || "").slice(0, 10))}</span></div>
+  <div class="row">${t.status === "open" ? `<button class="btn sm ghost" data-tdone="${esc(t.id)}">✓ Done</button><button class="btn sm ghost" data-tdis="${esc(t.id)}">Dismiss</button><button class="btn sm" data-tconv="${esc(t.id)}">→ Convert to request</button>` : `<span class="tag ${t.status === "done" ? "ok" : ""}">${esc(t.status)}</span>`}</div></div>`).join("") || `<div class="empty">No TODOs yet — they appear here when created manually or discovered by inbox sweepers.</div>`}
   <div class="chatbox"><input id="todo-in" placeholder="+ new todo…"><button class="btn sm" id="todo-add">Add</button></div></div>`;
 }
 function logsView() {
@@ -251,42 +357,47 @@ function logsView() {
   <span class="ltag">${esc(l.level)}</span><span class="lsrc">${esc(l.source || "")}</span><span>${esc(l.message || "")}</span></div>`).join("") || `<p class="hint">No logs</p>`}</div></div>`;
 }
 
-// ---------- request modal (PRD 4.5) ----------
+// ---------- request modal (PRD 4.5: Request/Direct, repo, 15 types, pipeline, attach) ----------
 function reqModal() {
   if (!S.showReq) return "";
   return `<div class="modal"><div class="mbox"><div class="dhead"><b>Submit a request</b><span class="spacer"></span><button class="btn ghost sm" id="reqx">✕</button></div>
   <p class="hint">A raw goal. The task-divider grills it, decomposes it, and enqueues the tasks after you confirm.</p>
   <div class="row"><button class="btn sm ${S.reqMode === "request" ? "primary" : "ghost"}" id="reqm-req">Request</button><button class="btn sm ${S.reqMode === "direct" ? "primary" : "ghost"}" id="reqm-dir">Direct task</button></div>
-  <label class="fld"><span>What should be built or fixed?</span><textarea id="req-text" rows="3" placeholder="Describe the outcome. Be concrete about done-ness."></textarea></label>
-  <div class="row"><label class="fld"><span>Repo</span><select id="req-repo"><option ${S.reqRepo === "— unset —" ? "selected" : ""}>— unset —</option><option ${S.reqRepo === "tab-automation" ? "selected" : ""}>tab-automation</option></select></label>
+  <label class="fld"><span>What should be built or fixed?</span><textarea id="req-text" rows="4" placeholder="Describe the outcome you want. Be concrete about done-ness."></textarea></label>
+  <div class="row"><label class="fld"><span>Repo</span><select id="req-repo"><option ${S.reqRepo === "— unset —" ? "selected" : ""}>— unset —</option><option ${S.reqRepo === "tab-automation" ? "selected" : ""}>tab-automation</option><option>EnhancedRestore</option><option>ConfigSync</option></select></label>
   <label class="fld"><span>Task type</span><select id="req-type">${TASK_TYPE_OPTS.map(([v, l]) => `<option value="${v}" ${S.reqType === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
-  <p class="hint">Pipeline: ${S.reqMode === "direct" ? esc(PIPELINE_PREVIEW[S.reqType] || "—") : "Pending divider selection"}</p>
+  <p class="hint">Pipeline: <b>${S.reqMode === "direct" ? esc(PIPELINE_PREVIEW[S.reqType] || "—") : "Pending divider selection"}</b></p>
+  <label class="fld"><span>Attach files (screenshots, logs — names only, stored alongside run)</span><input id="req-files" placeholder="e.g. screenshot.png, trace.log"></label>
   ${S.reqMsg ? `<p class="hint">${esc(S.reqMsg)}</p>` : ""}
-  <div class="row"><button class="btn primary" id="req-go" ${S.reqBusy ? "disabled" : ""}>${S.reqBusy ? "Enqueuing…" : "Enqueue Task"}</button></div></div></div>`;
+  <div class="row"><button class="btn primary" id="req-go" ${S.reqBusy ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : "Enqueue Task"}</button></div></div></div>`;
 }
 
 // ---------- render ----------
 function render() {
+  document.body.dataset.theme = S.theme;
   const v = S.view;
   const main = v === "board" ? boardView() : v === "assistant" ? `<div class="card"><h3>Assistant</h3><div class="chatbox"><input id="chat-in" placeholder='Ask Rick…'><button class="btn primary sm" id="chat-send">Send</button></div><div class="feed">${(S.feed?.messages || []).slice(-10).map((m) => `<div class="fmsg ${m.kind === "chat" ? "user" : "rick"}">${esc(m.text)}</div>`).join("")}</div></div>` :
     v === "brain" ? brainView() : v === "todos" ? todosView() : v === "automations" ? flowsView() :
     v === "requests" ? requestsView() : v === "outbox" ? outboxView() :
-    v === "config" ? `<div class="card"><h3>Configuration</h3><p class="hint">Setup wizard (port 3000) me badlo. <a href="/" target="_blank">Open setup</a></p></div>` :
-    v === "activity" ? `<div class="card"><h3>Activity</h3><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("")}</div></div>` :
+    v === "config" ? `<div class="card"><h3>Configuration</h3><p class="hint">Repos, paths, LLM models, tool permissions — managed in Setup wizard. <a href="/" target="_blank">Open setup</a></p><div class="row"><span class="kbd">refreshSec ${esc(S.cfg.refreshSec)}</span><span class="kbd">enabled ${esc(S.cfg.enabled)}</span></div></div>` :
+    v === "activity" ? `<div class="card"><h3>Activity <span class="hint">global audit stream</span></h3><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("")}</div></div>` :
     v === "retro" ? retroView() :
     v === "logs" ? logsView() : v === "tools" ? toolsView() : v === "agents" ? agentsView() :
-    `<div class="card"><h3>${esc(v)}</h3><p class="hint">ADO items live in Azure DevOps — link PRs from task detail. Coming soon: inline ADO sync.</p></div>`;
+    v === "ado" ? `<div class="card"><h3>ADO items</h3><p class="hint">Azure DevOps work items, bugs, user stories, PR links. Linked PRs appear on task cards (🔀 PR). Inline sync lands here when ADO credentials are configured.</p>${S.tasks.filter((t) => t.prUrl).map((t) => `<div class="appr"><div class="row"><b>${esc((t.title || "").slice(0, 80))}</b><span class="spacer"></span><a class="btn sm" href="${esc(t.prUrl)}" target="_blank">Open PR ↗</a></div></div>`).join("") || `<p class="hint">No linked PRs yet.</p>`}</div>` :
+    `<div class="card"><h3>${esc(v)}</h3><p class="hint">Coming soon.</p></div>`;
   $("#app").innerHTML = `<div class="app">${sidebar()}<main class="main">${topbar()}${main}</main></div>${reqModal()}${cmdPalette()}`;
   $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; render(); }));
+  $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; render(); }));
   $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; render(); }));
   $$("[data-dtab]").forEach((b) => (b.onclick = () => { S.detailTab = b.dataset.dtab; render(); }));
-  $$("[data-sel]").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; render(); loadDetail(S.sel); }));
-  $$(".banner").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; render(); loadDetail(S.sel); }));
+  $$("[data-sel]").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; S.sessIdx = 0; render(); loadDetail(S.sel); }));
+  $$(".banner").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; render(); loadDetail(S.sel); }));
   const dc = $("#dclose"); if (dc) dc.onclick = () => { S.sel = null; S.detail = null; render(); };
   $$("[data-rerun]").forEach((b) => (b.onclick = async () => { await api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.rerun, text: "" }) }); tick(true); }));
-  $$("[data-runflow]").forEach((b) => (b.onclick = async () => { await api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.runflow, text: "" }) }); tick(true); }));
+  $$("[data-runflow]").forEach((b) => (b.onclick = async () => { await api("/api/control/automations/" + b.dataset.runflow + "/run", { method: "POST" }).catch(() => api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.runflow, text: "" }) })); tick(true); }));
   $$("[data-xstep]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xstep; S.expandedSteps.has(i) ? S.expandedSteps.delete(i) : S.expandedSteps.add(i); render(); }));
   $$("[data-xvar]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xvar; S.expandedVariants.has(i) ? S.expandedVariants.delete(i) : S.expandedVariants.add(i); render(); }));
+  $$("[data-ctx]").forEach((b) => (b.onclick = () => { S.showCtx = !S.showCtx; render(); }));
   $$("[data-rqstep]").forEach((b) => (b.onclick = async () => {
     const i = +b.dataset.rqstep; const ta = $(`#rerun-${i}`); const guidance = ta ? ta.value : "";
     b.disabled = true; b.textContent = "⏳ Re-queuing…";
@@ -296,10 +407,32 @@ function render() {
     } catch (e) { b.disabled = false; b.textContent = `🔄 Re-queue from step ${i + 1}`; alert(e.message); }
   }));
   $$("[data-act]").forEach((b) => (b.onclick = async () => {
-    const a = b.dataset.act;
-    if (a === "done" && S.sel) { await api("/api/control/chat", { method: "POST", body: JSON.stringify({ text: `mark ${S.sel} done` }) }); }
-    tick(true);
+    const a = b.dataset.act; const box = $("#actbox");
+    if (!S.sel) return;
+    if (a === "req-changes") {
+      if (box) box.innerHTML = `<div class="chatbox"><input id="rc-in" placeholder="Review feedback for the agent…"><button class="btn sm primary" id="rc-go">Send</button></div>`;
+      const go = $("#rc-go"); if (go) go.onclick = async () => { const t = $("#rc-in").value.trim(); if (!t) return; await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: "request-changes", text: t }) }); S.detail = null; tick(true); };
+      return;
+    }
+    if (a === "append") {
+      if (box) box.innerHTML = `<div class="chatbox"><input id="ap-in" placeholder="Follow-up task title…"><button class="btn sm primary" id="ap-go">Append</button></div>`;
+      const go = $("#ap-go"); if (go) go.onclick = async () => { const t = $("#ap-in").value.trim(); if (!t) return; await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: "append", title: t }) }); S.detail = null; tick(true); };
+      return;
+    }
+    if (a === "requeue") { S.detailTab = "steps"; render(); return; }
+    const map = { done: "done", sweep: "sweep", del: "delete" };
+    if (map[a]) {
+      if (a === "del" && !confirm("Delete this task and its worktree?")) return;
+      await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: map[a] }) });
+      if (a === "del") { S.sel = null; S.detail = null; }
+      else S.detail = null;
+      tick(true);
+    }
   }));
+  const df = $("#diagfull"); if (df) df.onclick = () => { S.diagFull = true; render(); };
+  const dx = $("#diagx"); if (dx) dx.onclick = () => { S.diagFull = false; render(); };
+  const ss = $("#sesssel"); if (ss) ss.onchange = () => { S.sessIdx = Number(ss.value); render(); };
+  const sb = $("#sortby"); if (sb) sb.onchange = () => { S.sortBy = sb.value; render(); };
   const fq = $("#fq"); if (fq) { fq.oninput = () => { S.q = fq.value; if (S.cmdOpen) render(); }; fq.onchange = () => render(); }
   const nt = $("#newtask"); if (nt) nt.onclick = () => { S.showReq = true; render(); wireReq(); };
   const cmds = $("#cmds"); if (cmds) cmds.onclick = () => { S.cmdOpen = true; S.cmdIdx = 0; render(); };
@@ -308,17 +441,46 @@ function render() {
     const v = b.dataset.cmd; S.cmdOpen = false;
     if (v === "new") { S.showReq = true; render(); wireReq(); return; }
     if (v === "refresh") { tick(true); return; }
+    if (v === "pause") { S.paused = !S.paused; render(); arm(); return; }
     S.view = v; S.sel = null; S.detail = null; render();
   }));
-  const sw = $("#sweep"); if (sw) sw.onclick = async () => { await api("/api/control/chat", { method: "POST", body: JSON.stringify({ text: "sweep PR comments on failed tasks" }) }).catch(() => {}); tick(true); };
+  const sw = $("#sweep"); if (sw) sw.onclick = async () => { const bad = S.tasks.filter((t) => t.status === "failed"); for (const t of bad.slice(0, 5)) { await api(`/api/control/task/${t.id}/action`, { method: "POST", body: JSON.stringify({ action: "sweep" }) }).catch(() => {}); } tick(true); };
   const ab = $("#autobtn"); if (ab) ab.onclick = () => { S.auto = !S.auto; render(); arm(); };
-  const rs = $("#resume"); if (rs) rs.onclick = () => { S.auto = !S.auto; render(); arm(); };
+  const rs = $("#resume"); if (rs) rs.onclick = () => { S.paused = !S.paused; render(); arm(); };
   const rf = $("#refresh"); if (rf) rf.onclick = () => tick(true);
+  const th = $("#theme"); if (th) th.onclick = () => { S.theme = S.theme === "dark" ? "light" : "dark"; render(); };
   $$("[data-brain]").forEach((b) => (b.onclick = () => { S.brainSel = b.dataset.brain; render(); }));
   const bx = $("#brainx"); if (bx) bx.onclick = () => { S.brainSel = null; render(); };
   $$("[data-btab2]").forEach((b) => (b.onclick = () => { S.brainTab = b.dataset.btab2; render(); }));
+  const bq = $("#brain-q"); if (bq) { bq.oninput = () => { S.brainQ = bq.value; }; bq.onchange = () => render(); }
   const ob = $("#ob-add"); if (ob) ob.onclick = async () => { const i = $("#ob-in"); const t = i.value.trim(); if (!t) return; await api("/api/control/outbox", { method: "POST", body: JSON.stringify({ text: t }) }); tick(true); };
   $$("[data-obsent]").forEach((b) => (b.onclick = async () => { await api("/api/control/outbox/sent", { method: "POST", body: JSON.stringify({ id: b.dataset.obsent }) }); tick(true); }));
+  // flows editor wiring
+  $$("[data-tpl]").forEach((b) => (b.onclick = () => { S.flowEdit = { id: "flow-" + b.dataset.tpl, title: "", description: "", trigger_type: "schedule", trigger_config: {}, steps: [{ id: "sweep", type: "run_agent", title: "Sweep", details: "investigator agent" }, { id: "gate", type: "condition", title: "Gate", details: "1 rule" }, { id: "notify", type: "notify", title: "Notify", details: "outbox" }] }; render(); }));
+  const fn = $("#flownew"); if (fn) fn.onclick = () => { S.flowEdit = { id: "flow-new", title: "New flow", description: "", trigger_type: "manual", trigger_config: {}, steps: [] }; render(); };
+  const fx = $("#flowx"); if (fx) fx.onclick = () => { S.flowEdit = null; render(); };
+  const fc = $("#flowcancel"); if (fc) fc.onclick = () => { S.flowEdit = null; render(); };
+  $$("[data-ftrig]").forEach((b) => (b.onclick = () => { S.flowTrig = b.dataset.ftrig; if (S.flowEdit) S.flowEdit.trigger_type = S.flowTrig; render(); }));
+  $$("[data-fday]").forEach((b) => (b.onclick = () => { const d = b.dataset.fday; if (d === "Every day") S.flowDays = ["Every day"]; else { S.flowDays = S.flowDays.filter((x) => x !== "Every day"); S.flowDays.includes(d) ? S.flowDays = S.flowDays.filter((x) => x !== d) : S.flowDays.push(d); if (!S.flowDays.length) S.flowDays = ["Every day"]; } render(); }));
+  $$("[data-preset]").forEach((b) => (b.onclick = () => { const p = b.dataset.preset; if (p.includes("9:00")) S.flowTime = "9:00 AM"; else if (p.includes("6:00")) S.flowTime = "6:00 PM"; else if (p.includes("8:30")) S.flowTime = "8:30 AM"; else if (p.includes("11:00")) S.flowTime = "11:00 AM"; render(); }));
+  const fcr = $("#flowcron"); if (fcr) fcr.onclick = () => { const v = prompt("Cron expression (m h dom mon dow):", S.flowCron || "0 11 * * *"); if (v !== null) { S.flowCron = v; render(); } };
+  $$("[data-fadd]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const t = b.dataset.fadd; S.flowEdit.steps = [...(S.flowEdit.steps || []), { id: `step-${(S.flowEdit.steps || []).length + 1}`, type: t, title: t.replace(/_/g, " "), details: "" }]; render(); }));
+  $$("[data-fdel]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; S.flowEdit.steps = (S.flowEdit.steps || []).filter((_, i) => i !== Number(b.dataset.fdel)); render(); }));
+  $$("[data-fup]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const i = Number(b.dataset.fup); const a = [...(S.flowEdit.steps || [])]; if (i > 0) { [a[i - 1], a[i]] = [a[i], a[i - 1]]; S.flowEdit.steps = a; render(); } }));
+  $$("[data-fdown]").forEach((b) => (b.onclick = () => { if (!S.flowEdit) return; const i = Number(b.dataset.fdown); const a = [...(S.flowEdit.steps || [])]; if (i < a.length - 1) { [a[i + 1], a[i]] = [a[i], a[i + 1]]; S.flowEdit.steps = a; render(); } }));
+  const fs = $("#flowsave"); if (fs) fs.onclick = async () => { if (!S.flowEdit) return; await api("/api/control/automations", { method: "POST", body: JSON.stringify({ id: S.flowEdit.id, title: S.flowEdit.title || S.flowEdit.id, description: S.flowEdit.description || "", trigger_type: S.flowTrig, trigger_config: { timeOfDay: S.flowTime, days: S.flowDays, cron: S.flowCron }, steps: S.flowEdit.steps }) }); S.flowEdit = null; tick(true); };
+  $$("[data-flowedit]").forEach((b) => (b.onclick = () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowedit); if (f) { S.flowEdit = { id: f.id, title: f.title, description: f.description, trigger_type: f.trigger?.type || "manual", trigger_config: f.trigger || {}, steps: f.steps || [] }; S.flowTrig = f.trigger?.type || "manual"; render(); } }));
+  $$("[data-flowen]").forEach((b) => (b.onclick = async () => { const f = (S.flows || []).find((x) => x.id === b.dataset.flowen); await api(`/api/control/automations/${b.dataset.flowen}/enable`, { method: "POST", body: JSON.stringify({ enabled: f?.enabled === false }) }); tick(true); }));
+  $$("[data-flowdel]").forEach((b) => (b.onclick = async () => { if (!confirm("Delete flow?")) return; await api(`/api/control/automations/${b.dataset.flowdel}/delete`, { method: "POST" }); tick(true); }));
+  $$("[data-flowdry]").forEach((b) => (b.onclick = async () => { alert("Dry run: 0 side-effects (validation only)."); }));
+  // todos wiring
+  $$("[data-ttab]").forEach((b) => (b.onclick = () => { S.todoTab = b.dataset.ttab; render(); }));
+  const tq = $("#todo-q"); if (tq) { tq.oninput = () => { S.todoQ = tq.value; }; tq.onchange = () => render(); }
+  const ts2 = $("#todo-src"); if (ts2) ts2.onchange = () => { S.todoSource = ts2.value; render(); };
+  const tn = $("#todo-new"); if (tn) tn.onclick = () => { const t = prompt("New TODO:"); if (t) api("/api/control/todos", { method: "POST", body: JSON.stringify({ text: t }) }).then(() => tick(true)); };
+  $$("[data-tdone]").forEach((b) => (b.onclick = async () => { await api("/api/control/todos/done", { method: "POST", body: JSON.stringify({ id: b.dataset.tdone }) }); tick(true); }));
+  $$("[data-tdis]").forEach((b) => (b.onclick = async () => { await api("/api/control/todos/dismiss", { method: "POST", body: JSON.stringify({ id: b.dataset.tdis }) }); tick(true); }));
+  $$("[data-tconv]").forEach((b) => (b.onclick = async () => { const r = await api("/api/control/todos/convert", { method: "POST", body: JSON.stringify({ id: b.dataset.tconv }) }); S.view = "requests"; tick(true); }));
   wireReq();
   const cs = $("#chat-send"); if (cs) cs.onclick = sendChat;
   const ta = $("#todo-add"); if (ta) ta.onclick = async () => { const i = $("#todo-in"); const t = i.value.trim(); if (!t) return; await api("/api/control/todos", { method: "POST", body: JSON.stringify({ text: t }) }); tick(true); };
@@ -329,9 +491,10 @@ function cmdPalette() {
   if (!S.cmdOpen) return "";
   const cmds = [
     ["board", "Go to Board"], ["assistant", "Go to Assistant"], ["brain", "Go to Brain messages"],
-    ["todos", "Go to TODOs"], ["automations", "Go to Automations"], ["requests", "Go to Requests"],
+    ["todos", "Go to TODOs"], ["automations", "Go to Automations"], ["config", "Go to Configuration"],
+    ["ado", "Go to ADO items"], ["requests", "Go to Requests"],
     ["outbox", "Go to Outbox"], ["activity", "Go to Activity"], ["retro", "Go to Retro"],
-    ["new", "+ New task"], ["refresh", "Refresh now"],
+    ["new", "+ New task"], ["pause", "Pause / Resume"], ["refresh", "Refresh now"],
   ].filter(([v, l]) => !S.q || l.toLowerCase().includes(S.q.toLowerCase()));
   return `<div class="modal"><div class="mbox"><div class="dhead"><b>Commands</b><span class="spacer"></span><button class="btn ghost sm" id="cmdx">✕</button></div>
   ${cmds.map(([v, l], i) => `<button class="nav ${i === S.cmdIdx ? "on" : ""}" data-cmd="${v}">${esc(l)}</button>`).join("") || `<p class="hint">No match</p>`}</div></div>`;

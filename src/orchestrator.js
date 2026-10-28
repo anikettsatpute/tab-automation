@@ -152,3 +152,48 @@ export function calculateNextRunDescription(timeOfDay, days) {
   if (isEveryDay) return `Every day at ${timeOfDay}`;
   return `${days.join(", ")} at ${timeOfDay}`;
 }
+
+// ---- dispatcher + worktree (reference: IMPLEMENTATION §3 Copilot CLI dispatcher) ----
+// Pure helpers so headless-dashboard/workflow can share paths + redispatch prompts
+// without spawning anything here. Actual agent execution stays in workflow.js
+// (chatWithTools), which already streams tool calls into activity/logs.
+
+export function worktreePath(root, taskId) {
+  return `${root}/data/tasks/task-${taskId}`;
+}
+
+export function contextFilePath(root, taskId, stepIndex) {
+  return `${root}/data/responses/${taskId}/context-${stepIndex + 1}.md`;
+}
+
+export function handoffPath(root, taskId) {
+  return `${worktreePath(root, taskId)}/handoff.md`;
+}
+
+/** REDISPATCH prompt (reference: IMPLEMENTATION §3.2 redispatchStep). */
+export function redispatchPrompt({ originalPrompt = "", guidance = "", taskId = "", stepId = "", attempt = 1 }) {
+  return (
+    `REDISPATCH: This is a new execution attempt in an existing session, not permission to finish the previous attempt by merely rewriting its response.\n\n` +
+    (guidance ? `Operator Guidance:\n${guidance}\n\n` : "") +
+    `Original Specification (task ${taskId}, step '${stepId}', attempt ${attempt}):\n${originalPrompt}`
+  );
+}
+
+/** Restart budget (reference: PRD §6.3 max 6 attempts). */
+export const MAX_RESTART_ATTEMPTS = 6;
+
+export function budgetExceeded(attemptCount) {
+  return Number(attemptCount || 0) >= MAX_RESTART_ATTEMPTS;
+}
+
+/** Stage role mapping (reference: TASK_TYPES_CONFIG pipeline -> agent role). */
+export function stageRole(stageName) {
+  const t = String(stageName || "").toLowerCase();
+  if (/planner|plan|pm spec|scenario planner/.test(t)) return "planner";
+  if (/coder|code/.test(t)) return "coder";
+  if (/valid|review|flight/.test(t)) return "validator";
+  if (/pr|hotfix|publish|ticket|report|synthes/.test(t)) return "open-pr";
+  if (/investigat|triage|config/.test(t)) return "investigator";
+  if (/design/.test(t)) return "designer";
+  return "assistant";
+}

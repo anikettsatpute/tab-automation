@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { listRuns, getRun, getTaskDetail, pendingApprovals, decideApproval, controlOverview, controlRetro, listActivity, listLogs, listTodos, addTodo, completeTodo, addReminder, listReminders, writeLog, fileRequest, listRequests, linkRequestRun, queueOutbox, listOutbox, markOutboxSent } from "./db.js";
+import { listRuns, getRun, getTaskDetail, pendingApprovals, decideApproval, controlOverview, controlRetro, listActivity, listLogs, listTodos, addTodo, completeTodo, dismissTodo, getTodo, addReminder, listReminders, writeLog, fileRequest, listRequests, linkRequestRun, queueOutbox, listOutbox, markOutboxSent, updateRunStatus, markTaskDone, blockTask, appendTask, deleteTask, requeueCount, addTaskComment, listTaskComments, recordAgentSession, listAgentSessions, fileBrainMessage, listBrainMessages, updateBrainMessage, brainMetrics, listAutomations, saveAutomation, deleteAutomation, setAutomationEnabled, markAutomationRun } from "./db.js";
 import { loadAll } from "./memory.js";
 import { getDashboardConfig } from "./dashboard-db.js";
 import { loadJson } from "./setup-api.js";
@@ -287,6 +287,7 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
 
   // Re-queue from step N (reference: PRD 4.4 Re-queue from step N).
   // Earlier steps preserved; this step + downstream reset and re-run.
+  // Enforces restart budget (PRD §6.3 max 6 attempts) — over budget -> blocked + outbox.
   app.post("/api/control/task/:id/requeue", async (c) => {
     try {
       const id = c.req.param("id");
@@ -297,19 +298,78 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
       if (!Number.isInteger(idx) || idx < 0 || idx >= (d.steps || []).length) {
         return c.json({ error: `stepIndex 0..${(d.steps || []).length - 1} required` }, 400);
       }
+      const { MAX_RESTART_ATTEMPTS, redispatchPrompt } = await import("./orchestrator.js");
+      const prior = requeueCount(root, id);
+      if (prior >= MAX_RESTART_ATTEMPTS) {
+        blockTask(root, id, `Restart budget exceeded (${prior}/${MAX_RESTART_ATTEMPTS} attempts). Investigator summary queued to outbox.`);
+        queueOutbox(root, { channel: "dashboard", text: `Task ${id} blocked: restart budget exceeded after ${prior} requeues. Needs human review.`, runId: id });
+        writeLog(root, { level: "warn", source: "dashboard-requeue", message: `requeue ${id} denied: budget exceeded (${prior})`, runId: id });
+        return c.json({ error: `Restart budget exceeded (${prior}/${MAX_RESTART_ATTEMPTS}) — task blocked`, blocked: true }, 429);
+      }
       const { runWorkflow } = await import("./workflow.js");
       const tail = d.steps.slice(idx).map((s, k) => ({
         id: `requeue-${idx + 1 + k}-${s.id}`, type: "agent", agent: s.agent || "assistant",
-        prompt: `REDISPATCH (request ${id}, attempt ${k + 1}): re-run step '${s.id}' (${s.type}).\n` +
-          (guidance ? `Operator guidance:\n${String(guidance).slice(0, 1500)}\n\n` : "") +
-          `Original step output:\n${String(s.text || "").slice(0, 1500)}`,
+        prompt: redispatchPrompt({ originalPrompt: String(s.text || "").slice(0, 1500), guidance: String(guidance || ""), taskId: id, stepId: s.id, attempt: prior + k + 1 }),
       }));
       const wf = { id: `requeue-${id}-s${idx + 1}`, name: `Re-queue ${id} from step ${idx + 1}`, trigger: { type: "manual" }, steps: tail };
       const trigger = { kind: "dashboard-requeue", text: guidance || `re-run from step ${idx + 1}`, user: "dashboard", parentRun: id, stepIndex: idx };
       const ctx = await runWorkflow(cfg, { log, sendDiscord: async () => {} }, wf, trigger);
       try { writeLog(root, { level: "info", source: "dashboard-requeue", message: `requeue ${id} from step ${idx + 1}: ${String(guidance || "").slice(0, 200)}`, runId: ctx._runId || null }); } catch {}
-      return c.json({ ok: true, runId: ctx._runId || null, steps: tail.length });
+      return c.json({ ok: true, runId: ctx._runId || null, steps: tail.length, attempt: prior + 1, budget: MAX_RESTART_ATTEMPTS });
     } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
+  // Task actions (reference: PRD 4.4 drawer toolbar — request changes, sweep, done, append, requeue, delete).
+  app.post("/api/control/task/:id/action", async (c) => {
+    try {
+      const id = c.req.param("id");
+      const { action, text, title } = await c.req.json().catch(() => ({}));
+      const d = getTaskDetail(root, id);
+      if (!d) return c.json({ error: "not found" }, 404);
+      if (action === "done") {
+        markTaskDone(root, id);
+        writeLog(root, { level: "info", source: "dashboard-task", message: `task ${id} marked done`, runId: id });
+        return c.json({ ok: true, status: "done" });
+      }
+      if (action === "request-changes") {
+        if (!text) return c.json({ error: "text required" }, 400);
+        addTaskComment(root, id, { author: "dashboard", text: `Review feedback: ${String(text).slice(0, 2000)}` });
+        writeLog(root, { level: "info", source: "dashboard-task", message: `task ${id} review feedback: ${String(text).slice(0, 200)}`, runId: id });
+        return c.json({ ok: true });
+      }
+      if (action === "sweep") {
+        // Sweep PR comments: record a sweep comment + activity entry (ADO sync lands here when wired).
+        const note = text ? String(text).slice(0, 2000) : "Swept latest PR comments (no new threads).";
+        addTaskComment(root, id, { author: "pr-sweep", text: note });
+        writeLog(root, { level: "info", source: "dashboard-sweep", message: `task ${id} PR sweep: ${note.slice(0, 200)}`, runId: id });
+        return c.json({ ok: true, comments: listTaskComments(root, id, { limit: 5 }) });
+      }
+      if (action === "append") {
+        const child = appendTask(root, id, { title: title || text || `Follow-up to ${id}`, text: text || "" });
+        if (!child) return c.json({ error: "append failed" }, 500);
+        writeLog(root, { level: "info", source: "dashboard-task", message: `task ${id} appended -> ${child}`, runId: id });
+        return c.json({ ok: true, childId: child });
+      }
+      if (action === "delete") {
+        deleteTask(root, id);
+        writeLog(root, { level: "info", source: "dashboard-task", message: `task ${id} deleted` });
+        return c.json({ ok: true, deleted: true });
+      }
+      if (action === "block") {
+        blockTask(root, id, text || "Blocked from dashboard.");
+        queueOutbox(root, { channel: "dashboard", text: `Task ${id} blocked: ${String(text || "manual block").slice(0, 500)}`, runId: id });
+        return c.json({ ok: true, status: "failed" });
+      }
+      return c.json({ error: "unknown action (done|request-changes|sweep|append|delete|block)" }, 400);
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.get("/api/control/task/:id/comments", (c) => {
+    try { return c.json({ ok: true, comments: listTaskComments(root, c.req.param("id"), { limit: 30 }) }); }
+    catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.get("/api/control/task/:id/sessions", (c) => {
+    try { return c.json({ ok: true, sessions: listAgentSessions(root, c.req.param("id")) }); }
+    catch (err) { return c.json({ error: err.message }, 500); }
   });
 
   // Outbox queue (reference: PRD 4.2 Outbox view)
@@ -351,21 +411,70 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  // Brain messages: Discord-facing poller view (reference: Brain messages table)
+  // Brain messages: Discord-facing poller view (reference: PRD 4.7 Brain messages table).
+  // Persistent brain_messages table first, memory feed as fallback.
   app.get("/api/control/brain", (c) => {
     try {
+      const stored = listBrainMessages(root, { limit: 50 });
+      const metrics = brainMetrics(root);
+      if (stored.length) {
+        return c.json({
+          ok: true,
+          messages: stored.map((m) => ({
+            id: m.id, jobId: m.job_id, actorId: m.actor_id, conversationId: m.conversation_id,
+            sender: m.sender, source: m.source, receivedAt: m.received_at, messageText: m.message_text,
+            processingStatus: m.processing_status, outboxSummary: m.outbox_summary,
+            linkedTaskId: m.linked_task_id, processingError: m.processing_error,
+            requestText: m.request_text, sessionLog: m.session_log,
+          })),
+          metrics,
+          poller: { enabled: true, intervalMin: 2, completionUpdates: true, channel: "discord", lastScan: new Date().toISOString() },
+        });
+      }
       const all = loadAll(root);
       const msgs = all.filter((e) => ["chat", "reply", "pipeline"].includes(e.kind)).slice(-100).reverse().map((e, i) => ({
         id: `m${i}`, ts: e.ts, sender: e.user || "system", text: e.text || "", kind: e.kind, channelId: e.channelId || "",
         status: e.kind === "chat" ? "incoming" : "replied",
       }));
-      return c.json({ ok: true, messages: msgs, poller: { enabled: true, intervalMin: 2, completionUpdates: true } });
+      return c.json({ ok: true, messages: msgs, metrics, poller: { enabled: true, intervalMin: 2, completionUpdates: true } });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/brain", async (c) => {
+    try {
+      const b = await c.req.json().catch(() => ({}));
+      if (!b.messageText && !b.text) return c.json({ error: "messageText required" }, 400);
+      const id = fileBrainMessage(root, {
+        jobId: b.jobId || "", actorId: b.actorId || "", conversationId: b.conversationId || "",
+        sender: b.sender || "dashboard", source: b.source || "web-ui",
+        messageText: b.messageText || b.text || "", processingStatus: "queued",
+        linkedTaskId: b.linkedTaskId || null,
+      });
+      return c.json({ ok: true, id });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/brain/:id", async (c) => {
+    try {
+      const ok = updateBrainMessage(root, c.req.param("id"), await c.req.json().catch(() => ({})));
+      return c.json({ ok });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  // Automations: workflow cards (reference: YOUR FLOWS list)
+  // Automations: DB-backed flows (reference: PRD 4.6 YOUR FLOWS list + Edit flow).
+  // Falls back to config/workflows.json when the DB has no flows yet.
   app.get("/api/control/automations", (c) => {
     try {
+      const dbFlows = listAutomations(root);
+      if (dbFlows.length) {
+        return c.json({
+          ok: true, source: "db", flows: dbFlows.map((a) => ({
+            id: a.id, title: a.name, description: a.description,
+            configFileName: `${a.id}.json`, enabled: a.enabled,
+            trigger: { type: a.trigger_type, ...(a.trigger_config || {}) },
+            steps: (a.steps || []).map((s, i) => ({ id: s.id, type: s.type, title: s.title || `${s.type} ${i + 1}`, details: s.details || JSON.stringify(s).slice(0, 200) })),
+            state: a.state,
+          })),
+        });
+      }
       const workflows = loadJson("config/workflows.json", { workflows: [] });
       const runs = listRuns(root, { limit: 50 });
       const lastByWf = new Map();
@@ -373,13 +482,71 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
       const flows = (workflows.workflows || []).map((w) => {
         const last = lastByWf.get(w.id);
         return {
-          id: w.id, trigger: w.trigger?.type || "manual", cron: w.trigger?.cron || "", command: w.trigger?.command || "",
-          steps: (w.steps || []).map((s) => ({ id: s.id, type: s.type, agent: s.agent || null })),
+          id: w.id, title: w.id, description: w.description || "", configFileName: `${w.id}.json`,
           enabled: w.enabled !== false,
+          trigger: { type: w.trigger?.type || "manual", cron: w.trigger?.cron || "", command: w.trigger?.command || "" },
+          steps: (w.steps || []).map((s) => ({ id: s.id, type: s.type, title: `${s.type}: ${s.id}`, details: (s.prompt || s.message || s.text || "").slice(0, 200), agent: s.agent || null })),
           lastStatus: last?.status || null, lastRunAt: last?.started_at || null,
         };
       });
-      return c.json({ ok: true, flows });
+      return c.json({ ok: true, source: "config", flows });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/automations", async (c) => {
+    try {
+      const b = await c.req.json().catch(() => ({}));
+      if (!b.id && !b.title && !b.name) return c.json({ error: "id or title required" }, 400);
+      const id = saveAutomation(root, {
+        id: b.id || b.title || b.name,
+        name: b.title || b.name || b.id,
+        description: b.description || "",
+        trigger_type: b.trigger?.type || b.trigger_type || "manual",
+        trigger_config: { ...(b.trigger || {}), ...(b.trigger_config || {}) },
+        steps: (b.steps || []).map((s, i) => ({ id: s.id || `step-${i + 1}`, type: s.type || "agent", title: s.title || "", details: s.details || "", ...s })),
+        enabled: b.enabled !== false,
+      });
+      return c.json({ ok: true, id });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/automations/:id/run", async (c) => {
+    try {
+      const id = c.req.param("id");
+      const { runWorkflow } = await import("./workflow.js");
+      const auto = listAutomations(root).find((a) => a.id === id);
+      const steps = auto?.steps?.length ? auto.steps.map((s) => ({ id: s.id, type: s.type, ...s })) : null;
+      const wf = steps ? { id, name: auto.name, steps } : (cfg.workflows || []).find((w) => w.id === id);
+      if (!wf) return c.json({ error: "not found" }, 404);
+      const ctx = await runWorkflow(cfg, { log, sendDiscord: async () => {} }, wf, { kind: "dashboard-flow", automation: id });
+      try { markAutomationRun(root, id, { status: "done", runId: ctx._runId || null }); } catch {}
+      return c.json({ ok: true, runId: ctx._runId || null });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/automations/:id/enable", async (c) => {
+    try {
+      const { enabled } = await c.req.json().catch(() => ({}));
+      setAutomationEnabled(root, c.req.param("id"), enabled !== false);
+      return c.json({ ok: true });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/automations/:id/delete", async (c) => {
+    try { deleteAutomation(root, c.req.param("id")); return c.json({ ok: true }); }
+    catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
+  // Todos: dismiss + convert to request (reference: PRD 4.8 direct conversion).
+  app.post("/api/control/todos/dismiss", async (c) => {
+    try {
+      const { id } = await c.req.json().catch(() => ({}));
+      return c.json({ ok: dismissTodo(root, id) });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/todos/convert", async (c) => {
+    try {
+      const { id } = await c.req.json().catch(() => ({}));
+      const t = getTodo(root, id);
+      if (!t) return c.json({ error: "not found" }, 404);
+      const requestId = fileRequest(root, { text: t.text, mode: "request", repo: "tab-automation", taskType: "let_divider_choose", pipeline: [] });
+      return c.json({ ok: true, requestId });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 

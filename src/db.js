@@ -160,6 +160,49 @@ CREATE TABLE IF NOT EXISTS outbox (
   sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
+-- Brain messages (reference: PRD 4.7 Teams/Brain hub, IMPLEMENTATION 2.2 brainMessages) --
+CREATE TABLE IF NOT EXISTS brain_messages (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL DEFAULT '',
+  actor_id TEXT NOT NULL DEFAULT '',
+  conversation_id TEXT NOT NULL DEFAULT '',
+  sender TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'discord',
+  message_text TEXT NOT NULL DEFAULT '',
+  processing_status TEXT NOT NULL DEFAULT 'queued',
+  outbox_summary TEXT NOT NULL DEFAULT '',
+  linked_task_id TEXT,
+  processing_error TEXT,
+  request_text TEXT,
+  session_log TEXT,
+  received_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_brain_received ON brain_messages(received_at);
+CREATE INDEX IF NOT EXISTS idx_brain_status ON brain_messages(processing_status);
+-- Agent sessions (reference: PRD 4.4 Sessions tab, IMPLEMENTATION 2.2 agentSessions) --
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  step_number INTEGER NOT NULL DEFAULT 0,
+  session_uuid TEXT NOT NULL DEFAULT '',
+  runner_type TEXT NOT NULL DEFAULT 'tab-automation',
+  agent_role TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  workspace TEXT NOT NULL DEFAULT '',
+  transcript_path TEXT,
+  exit_code INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_task ON agent_sessions(task_id);
+-- Task comments (reference: PRD 4.3 comments count, Sweep PR comments) --
+CREATE TABLE IF NOT EXISTS task_comments (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  author TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_run ON task_comments(run_id);
 `;
 
 let _db = null;
@@ -251,20 +294,34 @@ export function getTaskDetail(root, runId) {
   if (!run) return null;
   let trigger = {};
   try { trigger = JSON.parse(run.trigger_json || "{}"); } catch {}
-  // sessions: distinct agent+model combos from steps+activity (reference: Sessions dropdown)
-  const sessMap = new Map();
-  for (const s of run.steps || []) {
-    if (!s.agent) continue;
-    const k = `${s.agent}::${run.model || "default"}`;
-    if (!sessMap.has(k)) sessMap.set(k, { agent: s.agent, model: run.model || "default", steps: 0, status: s.status });
-    sessMap.get(k).steps += 1;
+  // sessions: persisted agent_sessions first, else distinct agent+model combos (reference: Sessions dropdown)
+  let sessions = [];
+  try {
+    const stored = openDb(root).prepare("SELECT * FROM agent_sessions WHERE task_id = ? ORDER BY step_number, created_at").all(runId);
+    sessions = stored.map((s, i) => ({
+      id: s.id || `s${i + 1}`, agent: s.agent_role, model: s.model, workspace: s.workspace,
+      context: s.transcript_path || "Fresh session", steps: 1, status: s.exit_code === 0 ? "Completed" : s.exit_code == null ? "Resumed" : "Failed",
+      sessionUuid: s.session_uuid, runner: s.runner_type, stepNumber: s.step_number,
+    }));
+  } catch { /* fall through */ }
+  if (!sessions.length) {
+    const sessMap = new Map();
+    for (const s of run.steps || []) {
+      if (!s.agent) continue;
+      const k = `${s.agent}::${run.model || "default"}`;
+      if (!sessMap.has(k)) sessMap.set(k, { agent: s.agent, model: run.model || "default", steps: 0, status: s.status });
+      sessMap.get(k).steps += 1;
+    }
+    for (const a of run.activity || []) {
+      if (!a.actor || a.kind !== "tool") continue;
+      const k = `${a.actor}::${run.model || "default"}`;
+      if (!sessMap.has(k)) sessMap.set(k, { agent: a.actor, model: run.model || "default", steps: 0, status: a.status });
+    }
+    sessions = [...sessMap.values()].map((s, i) => ({ id: `s${i + 1}`, ...s, workspace: "tab-automation", context: "Fresh session" }));
   }
-  for (const a of run.activity || []) {
-    if (!a.actor || a.kind !== "tool") continue;
-    const k = `${a.actor}::${run.model || "default"}`;
-    if (!sessMap.has(k)) sessMap.set(k, { agent: a.actor, model: run.model || "default", steps: 0, status: a.status });
-  }
-  const sessions = [...sessMap.values()].map((s, i) => ({ id: `s${i + 1}`, ...s, workspace: "tab-automation", context: "Fresh session" }));
+  // comments (reference: Sweep PR comments -> task activity)
+  let comments = [];
+  try { comments = openDb(root).prepare("SELECT * FROM task_comments WHERE run_id = ? ORDER BY created_at DESC LIMIT 30").all(runId); } catch {}
   // diagram: pipeline nodes from steps (reference: PIPELINE Planner/Coder/Validator/Open PR)
   const diagram = (run.steps || []).map((s, i) => ({ id: s.step_id, label: s.step_id, type: s.type, agent: s.agent, status: s.status, order: i + 1 }));
   // end goal: last step text or trigger text (reference: END GOAL box)
@@ -282,9 +339,9 @@ export function getTaskDetail(root, runId) {
     branch: run.branch || `run/${run.id}`,
     taskType: run.task_type || run.kind || "manual",
     progress: { completed: run.progress_total ? run.progress_done : doneSteps, total: run.progress_total || steps.length || 1 },
-    prUrl: run.pr_url || null, commentsCount: run.comments_count || 0,
+    prUrl: run.pr_url || null, commentsCount: run.comments_count || comments.length || 0,
     blockedReason: run.blocked_reason || (run.status === "failed" ? run.error : null),
-    trigger, endGoal, steps,
+    trigger, endGoal, steps, comments,
     activity: (run.activity || []).map((a) => ({ id: a.id, kind: a.kind, actor: a.actor, action: a.action, detail: String(a.detail || "").slice(0, 500), ms: a.duration_ms, status: a.status, at: a.created_at })),
     sessions, diagram,
   };
@@ -582,4 +639,152 @@ export function controlRetro(root, { days = 30 } = {}) {
   ).all(since);
   const byDay = db.prepare("SELECT substr(started_at,1,10) d, COUNT(*) c FROM runs WHERE started_at >= ? GROUP BY d ORDER BY d").all(since);
   return { since, runs, byStatus, retries, byDay };
+}
+
+// ---- task actions (reference: PRD 4.4 drawer toolbar + 4.3 status badges) ----
+export function updateRunStatus(root, runId, { status, error = null, blockedReason = null } = {}) {
+  const db = openDb(root);
+  const sets = ["status = ?"];
+  const args = [status];
+  if (error !== null) { sets.push("error = ?"); args.push(error); }
+  if (blockedReason !== null) { sets.push("blocked_reason = ?"); args.push(blockedReason); }
+  if (status === "done" || status === "failed" || status === "blocked") { sets.push("finished_at = ?"); args.push(now()); }
+  args.push(runId);
+  const r = db.prepare(`UPDATE runs SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  return r.changes > 0;
+}
+
+export function markTaskDone(root, runId) {
+  return updateRunStatus(root, runId, { status: "done", error: null, blockedReason: null });
+}
+
+export function blockTask(root, runId, reason) {
+  return updateRunStatus(root, runId, { status: "failed", blockedReason: String(reason || "blocked").slice(0, 1000) });
+}
+
+export function appendTask(root, parentId, { title, text = "" }) {
+  const db = openDb(root);
+  const parent = db.prepare("SELECT * FROM runs WHERE id = ?").get(parentId);
+  if (!parent) return null;
+  const id = randomUUID().slice(0, 8);
+  db.prepare(
+    "INSERT INTO runs (id, workflow_id, kind, trigger_json, status, started_at, title, repository, branch, task_type, end_goal) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)"
+  ).run(id, parent.workflow_id, parent.kind || "manual",
+    JSON.stringify({ kind: "append", parentRun: parentId, text: String(text || title || "").slice(0, 1000) }),
+    now(), String(title || `Follow-up to ${parentId}`).slice(0, 300),
+    parent.repository || "tab-automation", `run/${id}`, parent.task_type || parent.kind || "manual",
+    String(text || title || "").slice(0, 2000));
+  return id;
+}
+
+export function deleteTask(root, runId) {
+  const db = openDb(root);
+  db.prepare("DELETE FROM run_steps WHERE run_id = ?").run(runId);
+  db.prepare("DELETE FROM activity WHERE run_id = ?").run(runId);
+  db.prepare("DELETE FROM task_comments WHERE run_id = ?").run(runId);
+  db.prepare("DELETE FROM agent_sessions WHERE task_id = ?").run(runId);
+  const r = db.prepare("DELETE FROM runs WHERE id = ?").run(runId);
+  return r.changes > 0;
+}
+
+/** Restart budget (reference: PRD §6.3 max 6 attempts). Counts prior requeue runs for a task. */
+export function requeueCount(root, runId) {
+  const db = openDb(root);
+  try {
+    return db.prepare(
+      "SELECT COUNT(*) c FROM runs WHERE trigger_json LIKE ?"
+    ).get(`%${runId}%`).c || 0;
+  } catch { return 0; }
+}
+
+// ---- task comments (reference: Sweep PR comments -> activity) ----
+export function addTaskComment(root, runId, { author = "dashboard", text = "" }) {
+  const db = openDb(root);
+  const id = randomUUID().slice(0, 8);
+  db.prepare("INSERT INTO task_comments (id, run_id, author, text, created_at) VALUES (?, ?, ?, ?, ?)")
+    .run(id, runId, String(author).slice(0, 120), String(text).slice(0, 4000), now());
+  try { db.prepare("UPDATE runs SET comments_count = comments_count + 1 WHERE id = ?").run(runId); } catch {}
+  return id;
+}
+
+export function listTaskComments(root, runId, { limit = 30 } = {}) {
+  return openDb(root).prepare("SELECT * FROM task_comments WHERE run_id = ? ORDER BY created_at DESC LIMIT ?").all(runId, limit);
+}
+
+// ---- agent sessions (reference: PRD 4.4 Sessions tab) ----
+export function recordAgentSession(root, runId, { stepNumber = 0, sessionUuid = "", runnerType = "tab-automation", agentRole = "", model = "", workspace = "", transcriptPath = null, exitCode = null } = {}) {
+  try {
+    const db = openDb(root);
+    const id = randomUUID().slice(0, 8);
+    db.prepare(
+      "INSERT INTO agent_sessions (id, task_id, step_number, session_uuid, runner_type, agent_role, model, workspace, transcript_path, exit_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, runId, stepNumber, String(sessionUuid).slice(0, 64), String(runnerType).slice(0, 60),
+      String(agentRole).slice(0, 60), String(model).slice(0, 80), String(workspace).slice(0, 300),
+      transcriptPath ? String(transcriptPath).slice(0, 500) : null, exitCode, now());
+    return id;
+  } catch { return null; }
+}
+
+export function listAgentSessions(root, runId) {
+  try {
+    return openDb(root).prepare("SELECT * FROM agent_sessions WHERE task_id = ? ORDER BY step_number, created_at").all(runId);
+  } catch { return []; }
+}
+
+// ---- brain messages (reference: PRD 4.7 Teams/Brain hub) ----
+export function fileBrainMessage(root, { jobId = "", actorId = "", conversationId = "", sender = "", source = "discord", messageText = "", processingStatus = "queued", linkedTaskId = null, requestText = null, sessionLog = null } = {}) {
+  const db = openDb(root);
+  const id = randomUUID().slice(0, 8);
+  db.prepare(
+    "INSERT INTO brain_messages (id, job_id, actor_id, conversation_id, sender, source, message_text, processing_status, outbox_summary, linked_task_id, request_text, session_log, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)"
+  ).run(id, String(jobId).slice(0, 120), String(actorId).slice(0, 120), String(conversationId).slice(0, 200),
+    String(sender).slice(0, 120), String(source).slice(0, 40), String(messageText).slice(0, 8000),
+    String(processingStatus).slice(0, 40), linkedTaskId, requestText ? String(requestText).slice(0, 4000) : null,
+    sessionLog ? String(sessionLog).slice(0, 8000) : null, now());
+  return id;
+}
+
+export function listBrainMessages(root, { status = null, limit = 50 } = {}) {
+  const db = openDb(root);
+  if (status) return db.prepare("SELECT * FROM brain_messages WHERE processing_status = ? ORDER BY received_at DESC LIMIT ?").all(status, limit);
+  return db.prepare("SELECT * FROM brain_messages ORDER BY received_at DESC LIMIT ?").all(limit);
+}
+
+export function updateBrainMessage(root, id, { processingStatus = null, outboxSummary = null, processingError = null, linkedTaskId = null } = {}) {
+  const sets = [];
+  const args = [];
+  if (processingStatus !== null) { sets.push("processing_status = ?"); args.push(String(processingStatus).slice(0, 40)); }
+  if (outboxSummary !== null) { sets.push("outbox_summary = ?"); args.push(String(outboxSummary).slice(0, 500)); }
+  if (processingError !== null) { sets.push("processing_error = ?"); args.push(String(processingError).slice(0, 2000)); }
+  if (linkedTaskId !== null) { sets.push("linked_task_id = ?"); args.push(linkedTaskId); }
+  if (!sets.length) return false;
+  args.push(id);
+  const r = openDb(root).prepare(`UPDATE brain_messages SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  return r.changes > 0;
+}
+
+export function brainMetrics(root) {
+  const db = openDb(root);
+  try {
+    const byStatus = db.prepare("SELECT processing_status s, COUNT(*) c FROM brain_messages GROUP BY s").all();
+    const m = { incoming: 0, queued: 0, running: 0, failed: 0, replied: 0 };
+    for (const r of byStatus) {
+      m.incoming += r.c;
+      if (r.s === "queued") m.queued += r.c;
+      else if (r.s === "running") m.running += r.c;
+      else if (r.s === "failed") m.failed += r.c;
+      else if (r.s === "reply_generated" || r.s === "replied") m.replied += r.c;
+    }
+    return m;
+  } catch { return { incoming: 0, queued: 0, running: 0, failed: 0, replied: 0 }; }
+}
+
+// ---- todos: dismiss + convert (reference: PRD 4.8) ----
+export function dismissTodo(root, id) {
+  const r = openDb(root).prepare("UPDATE todos SET status = 'dismissed', done_at = ? WHERE id = ? AND status = 'open'").run(now(), id);
+  return r.changes > 0;
+}
+
+export function getTodo(root, id) {
+  return openDb(root).prepare("SELECT * FROM todos WHERE id = ?").get(id);
 }

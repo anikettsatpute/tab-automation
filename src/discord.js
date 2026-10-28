@@ -3,7 +3,7 @@ import { chatWithTools } from "./agent.js";
 import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.js";
 import { handleRickMessage, workflowCatalog } from "./planner.js";
-import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders } from "./db.js";
+import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutbox } from "./db.js";
 
 export function startDiscord(cfg, deps) {
   const client = new Client({
@@ -136,9 +136,26 @@ export function startDiscord(cfg, deps) {
       const prompt = text
         .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
         .trim() || "Hello";
+      // Brain inbox (reference: PRD 4.7 Brain messages table + metrics).
+      // Every inbound mention/DM is filed; status flips as Rick replies/fails.
+      let brainId = null;
+      try {
+        brainId = fileBrainMessage(cfg.root, {
+          jobId: msg.id || "", actorId: msg.author?.id || "", conversationId: msg.channelId || "",
+          sender: msg.author?.tag || "discord", source: isDM ? "dm" : "discord",
+          messageText: prompt.slice(0, 4000), processingStatus: "running",
+        });
+      } catch {}
       await msg.channel.sendTyping().catch(() => {});
       // Rick: classify simple-fact vs big-task; pipelines report back in-channel
-      await handleRickMessage(cfg, deps, msg, prompt);
+      try {
+        await handleRickMessage(cfg, deps, msg, prompt);
+        try { if (brainId) updateBrainMessage(cfg.root, brainId, { processingStatus: "reply_generated", outboxSummary: "1 sent" }); } catch {}
+      } catch (err) {
+        try { if (brainId) updateBrainMessage(cfg.root, brainId, { processingStatus: "failed", processingError: String(err.message).slice(0, 1000) }); } catch {}
+        try { queueOutbox(cfg.root, { channel: msg.channelId, text: `Brain turn failed for ${msg.author?.tag || "user"}: ${String(err.message).slice(0, 300)}` }); } catch {}
+        throw err;
+      }
       return;
     } catch (err) {
       deps.log?.(`[discord] message handler failed: ${err.message}`);

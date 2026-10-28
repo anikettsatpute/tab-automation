@@ -114,6 +114,21 @@ export async function runWorkflow(cfg, deps, workflow, triggerCtx = {}) {
     deps.log?.(`[db] createRun failed (continuing without persistence): ${err.message}`);
   }
   ctx._runId = runId;
+  // Worktree + context snapshot (reference: IMPLEMENTATION §3.1 Step 1).
+  // Best-effort: never break a run if the FS is read-only.
+  try {
+    const { worktreePath, contextFilePath, handoffPath } = await import("./orchestrator.js");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    if (runId) {
+      mkdirSync(worktreePath(cfg.root, runId), { recursive: true });
+      mkdirSync(`${cfg.root}/data/responses/${runId}`, { recursive: true });
+      writeFileSync(handoffPath(cfg.root, runId),
+        `# handoff — run ${runId} (${workflow.id})\nstarted: ${ctx.now}\ntrigger: ${JSON.stringify(triggerCtx).slice(0, 500)}\n`, { flag: "w" });
+      (workflow.steps ?? []).forEach((s, i) => {
+        try { writeFileSync(contextFilePath(cfg.root, runId, i), `# context — step ${i + 1} ${s.id} (${s.type})\n\n${s.prompt || s.message || s.text || s.template || ""}\n`.slice(0, 20000), { flag: "w" }); } catch {}
+      });
+    }
+  } catch { /* best effort */ }
   try {
     await runSteps(cfg, deps, workflow.steps ?? [], ctx);
     if (runId) { try { finishRun(cfg.root, runId, { status: "done" }); } catch {} }
@@ -143,8 +158,9 @@ function collectTaskItems(step, ctx) {
 }
 
 async function runSteps(cfg, deps, steps, ctx) {
-  for (const step of steps) {
-    await runStep(cfg, deps, step, ctx);
+  for (let i = 0; i < steps.length; i++) {
+    ctx._stepIdx = i;
+    await runStep(cfg, deps, steps[i], ctx);
   }
 }
 
@@ -179,9 +195,23 @@ async function runStep(cfg, deps, step, ctx) {
       let prompt = renderTemplate(step.prompt ?? "", ctx);
       if (step.output === "json" && step.outputSchema) prompt += jsonPromptSuffix(step.outputSchema);
       const mem = step.memory === false ? "" : formatMemories(searchMemory(cfg.root, prompt, 4));
+      const tAgent = Date.now();
       const out = step.tools === false
         ? await chatCompletion(cfg, step.agent, prompt)
         : await chatWithTools(cfg, step.agent, prompt, { extraContext: mem, toolCtx: { runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "" } });
+      // Session record (reference: PRD 4.4 Sessions tab + IMPLEMENTATION 2.2 agentSessions).
+      try {
+        const { recordAgentSession } = await import("./db.js");
+        recordAgentSession(cfg.root, ctx._runId, {
+          stepNumber: ctx._stepIdx ?? 0, sessionUuid: `${ctx._runId}-${step.id}`,
+          runnerType: "tab-automation", agentRole: step.agent || "assistant",
+          model: cfg.agents?.get?.(step.agent)?.model || cfg.agents?.get?.(step.agent)?.deployment || "",
+          workspace: "tab-automation",
+        });
+      } catch {}
+      try {
+        recordActivity(cfg.root, { runId: ctx._runId, kind: "tool", actor: step.agent || ctx.workflow, action: `agent:${step.agent || "assistant"}`, detail: String(prompt).slice(0, 300), durationMs: Date.now() - tAgent, status: "ok" });
+      } catch {}
       let stored = out;
       let outputJson = null;
       if (step.output === "json") {
