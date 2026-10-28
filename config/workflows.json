@@ -4,17 +4,33 @@
       "id": "todo-digest",
       "name": "Daily todo digest",
       "description": "08:00 IST daily: open todos + pending reminders to Discord.",
-      "trigger": { "type": "schedule", "cron": "0 8 * * *", "description": "08:00 IST daily" },
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 8 * * *",
+        "description": "08:00 IST daily"
+      },
       "steps": [
-        { "id": "digest", "type": "digest", "saveAs": "digest" },
-        { "id": "notify", "type": "discord_send", "message": "{{steps.digest}}" }
+        {
+          "id": "digest",
+          "type": "digest",
+          "saveAs": "digest"
+        },
+        {
+          "id": "notify",
+          "type": "discord_send",
+          "message": "{{steps.digest}}"
+        }
       ]
     },
     {
       "id": "morning-briefing",
       "name": "Morning briefing",
       "description": "Scheduled demo: summarizer agent -> conditional Discord post.",
-      "trigger": { "type": "schedule", "cron": "30 8 * * *", "description": "08:30 Asia/Kolkata daily" },
+      "trigger": {
+        "type": "schedule",
+        "cron": "30 8 * * *",
+        "description": "08:30 Asia/Kolkata daily"
+      },
       "steps": [
         {
           "id": "draft",
@@ -34,7 +50,10 @@
       "id": "ask-review",
       "name": "On-demand review",
       "description": "Triggered from Discord with !review <text>. Runs coder agent, posts result, conditionally pings.",
-      "trigger": { "type": "discord", "command": "review" },
+      "trigger": {
+        "type": "discord",
+        "command": "review"
+      },
       "steps": [
         {
           "id": "review",
@@ -51,8 +70,18 @@
         {
           "id": "escalate?",
           "type": "condition",
-          "condition": { "left": "{{steps.review}}", "operator": "contains", "right": "urgent" },
-          "then": [{ "id": "ping", "type": "discord_send", "message": "⚠️ The review mentions *urgent* — please take a look." }]
+          "condition": {
+            "left": "{{steps.review}}",
+            "operator": "contains",
+            "right": "urgent"
+          },
+          "then": [
+            {
+              "id": "ping",
+              "type": "discord_send",
+              "message": "⚠️ The review mentions *urgent* — please take a look."
+            }
+          ]
         }
       ]
     },
@@ -60,50 +89,155 @@
       "id": "ping-test",
       "name": "Ping test",
       "description": "Manual smoke test: node src/index.js --run ping-test",
-      "trigger": { "type": "manual" },
+      "trigger": {
+        "type": "manual"
+      },
       "steps": [
-        { "id": "hello", "type": "log", "text": "ping-test workflow executed at {{now}}" },
-        { "id": "announce", "type": "discord_send", "message": "✅ tab-automation is alive ({{now}})." }
+        {
+          "id": "hello",
+          "type": "log",
+          "text": "ping-test workflow executed at {{now}}"
+        },
+        {
+          "id": "announce",
+          "type": "discord_send",
+          "message": "✅ tab-automation is alive ({{now}})."
+        }
       ]
     },
     {
       "id": "inbox-todos",
       "name": "Daily inbox → TODOs",
       "description": "Reference flow: agent sweep writes JSON, quiet-condition stops on nothing-new, task step files TODOs, notify posts the count.",
-      "trigger": { "type": "schedule", "cron": "0 11 * * *", "description": "Every day at 11:00 AM" },
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 11 * * *",
+        "description": "Every day at 11:00 AM"
+      },
       "steps": [
-        { "id": "sweep", "type": "run_agent", "agent": "assistant", "prompt": "Sweep recent chats and email for actionable asks. Respond with ONLY valid JSON, no other text: { \"created\": <int>, \"skippedExisting\": <int>, \"tasks\": [{\"title\": <string>}] }.", "output": "json", "outputSchema": { "created": "int", "skippedExisting": "int" }, "saveAs": "sweep" },
-        { "id": "quiet?", "type": "condition", "condition": { "left": "{{steps.sweep.created}}", "operator": "equals", "right": "0" }, "then": [{ "id": "stop", "type": "log", "text": "Nothing new — staying quiet." }], "else": [
-          { "id": "file", "type": "create_task", "from": "sweep" },
-          { "id": "tell", "type": "notify", "message": "Inbox sweep: {{steps.sweep.created}} new TODO(s), {{steps.sweep.skippedExisting}} already filed." }
-        ] }
+        {
+          "id": "sweep",
+          "type": "run_agent",
+          "agent": "assistant",
+          "prompt": "Sweep recent chats and email for actionable asks. Respond with ONLY valid JSON, no other text: { \"created\": <int>, \"skippedExisting\": <int>, \"tasks\": [{\"title\": <string>}] }.",
+          "output": "json",
+          "outputSchema": {
+            "created": "int",
+            "skippedExisting": "int"
+          },
+          "saveAs": "sweep"
+        },
+        {
+          "id": "quiet?",
+          "type": "condition",
+          "condition": {
+            "left": "{{steps.sweep.created}}",
+            "operator": "equals",
+            "right": "0"
+          },
+          "then": [
+            {
+              "id": "stop",
+              "type": "log",
+              "text": "Nothing new — staying quiet."
+            }
+          ],
+          "else": [
+            {
+              "id": "file",
+              "type": "create_task",
+              "from": "sweep"
+            },
+            {
+              "id": "tell",
+              "type": "notify",
+              "message": "Inbox sweep: {{steps.sweep.created}} new TODO(s), {{steps.sweep.skippedExisting}} already filed."
+            }
+          ]
+        }
       ]
     },
     {
       "id": "premarket-india",
       "name": "India pre-market briefing",
       "description": "08:45 IST weekdays = 30 min before NSE 09:15 open. Quotes + news + Reddit -> finance-india agent -> #finance.",
-      "trigger": { "type": "schedule", "cron": "45 8 * * 1-5", "description": "08:45 IST Mon-Fri" },
+      "trigger": {
+        "type": "schedule",
+        "cron": "45 8 * * 1-5",
+        "description": "08:45 IST Mon-Fri"
+      },
       "steps": [
-        { "id": "brief", "type": "finance", "market": "india", "saveAs": "india_brief" }
+        {
+          "id": "brief",
+          "type": "finance",
+          "market": "india",
+          "saveAs": "india_brief"
+        }
       ]
     },
     {
       "id": "premarket-us",
       "name": "US pre-market briefing",
       "description": "18:30 IST weekdays = 60 min before US 19:00 IST open. Quotes + news + Reddit -> finance-us agent -> #finance.",
-      "trigger": { "type": "schedule", "cron": "30 18 * * 1-5", "description": "18:30 IST Mon-Fri" },
+      "trigger": {
+        "type": "schedule",
+        "cron": "30 18 * * 1-5",
+        "description": "18:30 IST Mon-Fri"
+      },
       "steps": [
-        { "id": "brief", "type": "finance", "market": "us", "saveAs": "us_brief" }
+        {
+          "id": "brief",
+          "type": "finance",
+          "market": "us",
+          "saveAs": "us_brief"
+        }
       ]
     },
     {
       "id": "finance-now",
       "name": "On-demand finance briefing",
       "description": "Discord: !finance india|us. Runs the briefing immediately.",
-      "trigger": { "type": "discord", "command": "finance" },
+      "trigger": {
+        "type": "discord",
+        "command": "finance"
+      },
       "steps": [
-        { "id": "brief", "type": "finance", "market": "{{trigger.text}}", "saveAs": "brief" }
+        {
+          "id": "brief",
+          "type": "finance",
+          "market": "{{trigger.text}}",
+          "saveAs": "brief"
+        }
+      ]
+    },
+    {
+      "id": "scout-test",
+      "name": "Scout research test",
+      "description": "Manual test: scout researches a topic, summarizer compresses, posts to Discord.",
+      "trigger": {
+        "type": "discord",
+        "command": "scout"
+      },
+      "steps": [
+        {
+          "id": "research",
+          "type": "agent",
+          "agent": "scout",
+          "prompt": "Research this topic with web_search + web_fetch and return an evidence pack:\n\n{{trigger.text}}",
+          "saveAs": "evidence"
+        },
+        {
+          "id": "brief",
+          "type": "agent",
+          "agent": "summarizer",
+          "prompt": "Compress this evidence pack into a Discord briefing (TL;DR + key points + next action):\n\n{{steps.research}}",
+          "saveAs": "briefing"
+        },
+        {
+          "id": "post",
+          "type": "discord_send",
+          "message": "🔍 Scout report:\n\n{{steps.brief}}"
+        }
       ]
     }
   ]

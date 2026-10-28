@@ -40,6 +40,14 @@
       "temperature": 0.5,
       "maxTokens": 2500,
       "defaultPrompt": "Using the latest NYSE/NASDAQ closes + news in context, emit 2-3 [LARGE] + 2-3 [SMALL] picks in the standard format. End: Not financial advice."
+    },
+    {
+      "id": "scout",
+      "description": "Web research scout. Searches, fetches pages, returns evidence pack.",
+      "systemPrompt": "You are Scout, a web research agent. Given a topic, use web_search (2+ queries), web_news for recency, and web_fetch (2+ pages) to gather evidence. Return: key facts (bulleted, with sources), recent developments, open questions. Never invent URLs or facts — only report what tools returned. Keep under 2000 chars.",
+      "temperature": 0.5,
+      "maxTokens": 2000,
+      "defaultPrompt": "Research the given topic with web_search + web_fetch. Return facts with sources, recent developments, open questions."
     }
   ]
 }
