@@ -2,6 +2,7 @@ import { loadConfig } from "./config.js";
 import { runWorkflow } from "./workflow.js";
 import { startScheduler } from "./scheduler.js";
 import { startDiscord } from "./discord.js";
+import { startHeadlessDashboard } from "./headless-dashboard.js";
 
 const args = process.argv.slice(2);
 const { cfg, errors } = loadConfig();
@@ -57,16 +58,29 @@ let sendDiscord = async () => {};
 const deps = {
   log,
   sendDiscord: (...a) => sendDiscord(...a),
-  runWorkflow: (wf, trigger, replyChannel) =>
+  // replyTo: async (text) fn for in-thread completion/failure notices (discord triggers only)
+  runWorkflow: (wf, trigger, replyChannel, replyTo) =>
     runWorkflow(cfg, {
       log,
       sendDiscord: async (ch, m) => sendDiscord(ch || replyChannel, m),
-    }, wf, trigger),
+    }, wf, trigger).then(
+      (ctx) => {
+        if (replyTo) replyTo(`✅ **${wf.id}** done.`).catch(() => {});
+        return ctx;
+      },
+      (err) => {
+        if (replyTo) replyTo(`❌ **${wf.id}** failed: ${String(err.message).slice(0, 300)}`).catch(() => {});
+        throw err;
+      }
+    ),
 };
 
 const discord = startDiscord(cfg, deps);
 sendDiscord = discord.sendDiscord;
 startScheduler(cfg, deps);
+// Headless Control Room: the UX for this bot (local DB is truth — runs happen here).
+// Served at HEADLESS_PORT (default 3001; set 3000 on tablet where only headless runs).
+startHeadlessDashboard(cfg, { log });
 
 process.on("SIGINT", () => { log("shutting down"); process.exit(0); });
 process.on("SIGTERM", () => { log("shutting down"); process.exit(0); });

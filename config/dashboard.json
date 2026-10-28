@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "refreshSec": 5,
+  "showRuns": true,
+  "showApprovals": true,
+  "showWorkflows": true
+}

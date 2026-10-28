@@ -1,0 +1,12 @@
+{
+  "defaultProvider": "azure",
+  "providers": [
+    {
+      "id": "azure",
+      "type": "azure-foundry",
+      "endpoint": "https://aniket2245satpute-1112-resource.services.ai.azure.com/openai/v1",
+      "modelDefault": "gpt-5.6-terra",
+      "keyEnv": "AZURE_OPENAI_API_KEY"
+    }
+  ]
+}

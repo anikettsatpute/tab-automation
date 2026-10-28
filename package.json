@@ -5,16 +5,28 @@
   "type": "module",
   "description": "Always-on Discord agent + scheduled workflow automation for Samsung Tab (Termux).",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "validate": "node src/validate.js",
-    "list": "node src/index.js --list"
+    "list": "node src/index.js --list",
+    "setup": "npm run build:all && node src/setup-server.js",
+    "setup:build": "vite build",
+    "setup:dev": "vite build --watch",
+    "setup:server": "node src/setup-server.js",
+    "dashboard:build": "vite build --config vite.dashboard.config.js",
+    "dashboard:dev": "vite build --config vite.dashboard.config.js --watch",
+    "build:all": "npm run setup:build && npm run dashboard:build"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.5",
     "discord.js": "^14.27.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "hono": "^4.13.14"
+  },
+  "devDependencies": {
+    "vite": "^8.3.5"
   }
 }

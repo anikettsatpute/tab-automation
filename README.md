@@ -30,12 +30,14 @@ Always-on Discord agent + scheduled workflow automation. Built fresh (Harness wa
 ```sh
 cd tab-automation
 npm install
-cp .env.example .env   # fill in secrets
-node src/validate.js   # checks config + cross-references
+npm run setup    # builds the Vite setup UI, opens it in your browser
 node src/index.js --list
 node src/index.js --run ping-test   # manual workflow smoke test (no Discord login)
 node src/index.js                   # full run: Discord + scheduler
 ```
+
+`npm run setup` = `vite build` → `node src/setup-server.js` (Hono API + serves `dist-setup/` on :3000, auto-opens browser).
+Dev mode: `npm run setup:dev` (vite build --watch (rebuilds on save)) + `npm run setup` (Hono on :3000).
 
 ## Deploy to the Tab (Termux)
 
@@ -56,8 +58,12 @@ Keepalive: `run.sh` holds a wake lock and restarts the bot on crash. Leave the T
 
 ## Config reference
 
-- `config/agents.json` — add agents: `{ id, systemPrompt, deployment?, temperature?, maxTokens? }`. `deployment: "env:VAR"` allows per-agent overrides.
-- `config/workflows.json` — add workflows with `trigger` (`schedule`+`cron` | `discord`+`command` | `manual`) and `steps[]`.
+- `config/providers.json` — providers (`azure-foundry` | `openrouter` | `meta`) + default. Keys stay in `.env`.
+- `config/agents.json` — add agents: `{ id, systemPrompt, provider?, model?, tools?, output?, outputSchema?, temperature?, maxTokens? }`. `model: "env:VAR"` allows per-agent overrides.
+- `config/tools.json` — MCP servers (`stdio` | `http`). Per-agent allowlists live in `agents[].tools`, setup-wizard-only.
+- `config/discord.json` — main channel, extras, owner id (written by setup picker).
+- `config/workflows.json` — add workflows with `trigger` (`schedule`+`cron` | `discord`+`command` | `manual`) and `steps[]`. Agent steps support `output: json` + `outputSchema` (max 8 vars bool|int|string); templates use `{{steps.<id>}}` / `{{steps.<id>.<field>}}`; conditions support `is_true`/`is_false`; new step types `subflow`, `transform`.
+- Runs persist to SQLite `data/tab-automation.db` — `!history`, `!run <id>` in Discord.
 - `.env` — `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID` (notify target), `DISCORD_LISTEN_CHANNELS` (optional), `AZURE_OPENAI_ENDPOINT/KEY/DEPLOYMENT`.
 
 ## Discord setup reuse

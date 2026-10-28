@@ -44,6 +44,21 @@ export function startScheduler(cfg, deps) {
   const tick = async () => {
     const now = new Date();
     const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+    // due reminders (every tick, cheap indexed query)
+    try {
+      const { dueReminders, markReminderSent } = await import("./db.js");
+      for (const r of dueReminders(cfg.root)) {
+        try {
+          await deps.sendDiscord?.(r.channel_id || undefined, `⏰ Reminder: ${r.text}`);
+          markReminderSent(cfg.root, r.id);
+          deps.log?.(`[scheduler] reminder sent ${r.id}`);
+        } catch (e) {
+          deps.log?.(`[scheduler] reminder ${r.id} failed: ${e.message}`);
+        }
+      }
+    } catch (e) {
+      deps.log?.(`[scheduler] reminder check failed: ${e.message}`);
+    }
     for (const w of cfg.workflows) {
       const cron = w.trigger?.cron;
       if (w.trigger?.type !== "schedule" || !cron) continue;
@@ -56,6 +71,34 @@ export function startScheduler(cfg, deps) {
       } catch (err) {
         deps.log?.(`[scheduler] ${w.id} failed: ${err.message}`);
       }
+    }
+    // DB automations (reference: YOUR FLOWS with schedule trigger) — same 30s tick.
+    // Agent JSON -> task steps -> next step all persist via runWorkflow->recordStep.
+    try {
+      const { listAutomations, markAutomationRun } = await import("./db.js");
+      for (const a of listAutomations(cfg.root)) {
+        if (!a.enabled) continue;
+        const cron = a.trigger_config?.cron;
+        const everyMin = Number(a.trigger_config?.everyMinutes) || 0;
+        const dueCron = a.trigger_type === "schedule" && cron && matchesCron(cron, now);
+        const dueInterval = a.trigger_type === "schedule" && everyMin > 0
+          && (!a.state?.last_run_at || (now - new Date(a.state.last_run_at)) >= everyMin * 60_000);
+        if (!dueCron && !dueInterval) continue;
+        const seenKey = `auto:${a.id}`;
+        if (dueCron && seen.get(seenKey) === key) continue;
+        seen.set(seenKey, key);
+        deps.log?.(`[scheduler] firing automation ${a.id}`);
+        const wf = { id: a.id, name: a.name, steps: a.steps };
+        try {
+          const ctx = await deps.runWorkflow(wf, { kind: "schedule", at: now.toISOString(), automation: a.id });
+          markAutomationRun(cfg.root, a.id, { status: "done", runId: ctx?._runId || null });
+        } catch (err) {
+          try { markAutomationRun(cfg.root, a.id, { status: `failed: ${String(err.message).slice(0, 120)}` }); } catch {}
+          deps.log?.(`[scheduler] automation ${a.id} failed: ${err.message}`);
+        }
+      }
+    } catch (e) {
+      deps.log?.(`[scheduler] automation check failed: ${e.message}`);
     }
   };
   const timer = setInterval(tick, 30_000);

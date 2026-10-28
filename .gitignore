@@ -3,3 +3,5 @@ node_modules/
 data/
 *.log
 .next/
+dist-setup/
+data/tablet-tab-automation.db

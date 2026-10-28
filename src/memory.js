@@ -58,6 +58,13 @@ export function recentMemory(root, limit = 8) {
   return loadAll(root).slice(-limit);
 }
 
+/** Recent entries for one channel, oldest-first. Powers "run it" resolution
+ *  and conversation history injection. Persistent (same jsonl file). */
+export function recentChannel(root, channelId, limit = 12) {
+  if (!channelId) return [];
+  return loadAll(root).filter((e) => e.channelId === channelId).slice(-limit);
+}
+
 export function memoryStats(root) {
   const all = loadAll(root);
   const kinds = {};

@@ -1,6 +1,16 @@
 {
   "workflows": [
     {
+      "id": "todo-digest",
+      "name": "Daily todo digest",
+      "description": "08:00 IST daily: open todos + pending reminders to Discord.",
+      "trigger": { "type": "schedule", "cron": "0 8 * * *", "description": "08:00 IST daily" },
+      "steps": [
+        { "id": "digest", "type": "digest", "saveAs": "digest" },
+        { "id": "notify", "type": "discord_send", "message": "{{steps.digest}}" }
+      ]
+    },
+    {
       "id": "morning-briefing",
       "name": "Morning briefing",
       "description": "Scheduled demo: summarizer agent -> conditional Discord post.",
@@ -54,6 +64,19 @@
       "steps": [
         { "id": "hello", "type": "log", "text": "ping-test workflow executed at {{now}}" },
         { "id": "announce", "type": "discord_send", "message": "✅ tab-automation is alive ({{now}})." }
+      ]
+    },
+    {
+      "id": "inbox-todos",
+      "name": "Daily inbox → TODOs",
+      "description": "Reference flow: agent sweep writes JSON, quiet-condition stops on nothing-new, task step files TODOs, notify posts the count.",
+      "trigger": { "type": "schedule", "cron": "0 11 * * *", "description": "Every day at 11:00 AM" },
+      "steps": [
+        { "id": "sweep", "type": "run_agent", "agent": "assistant", "prompt": "Sweep recent chats and email for actionable asks. Respond with ONLY valid JSON, no other text: { \"created\": <int>, \"skippedExisting\": <int>, \"tasks\": [{\"title\": <string>}] }.", "output": "json", "outputSchema": { "created": "int", "skippedExisting": "int" }, "saveAs": "sweep" },
+        { "id": "quiet?", "type": "condition", "condition": { "left": "{{steps.sweep.created}}", "operator": "equals", "right": "0" }, "then": [{ "id": "stop", "type": "log", "text": "Nothing new — staying quiet." }], "else": [
+          { "id": "file", "type": "create_task", "from": "sweep" },
+          { "id": "tell", "type": "notify", "message": "Inbox sweep: {{steps.sweep.created}} new TODO(s), {{steps.sweep.skippedExisting}} already filed." }
+        ] }
       ]
     },
     {

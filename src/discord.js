@@ -2,6 +2,8 @@ import { Client, GatewayIntentBits, Events } from "discord.js";
 import { chatWithTools } from "./agent.js";
 import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.js";
+import { handleRickMessage, workflowCatalog } from "./planner.js";
+import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders } from "./db.js";
 
 export function startDiscord(cfg, deps) {
   const client = new Client({
@@ -43,18 +45,82 @@ export function startDiscord(cfg, deps) {
           await msg.reply(`🧠 Memory: ${s.total} entries. Oldest ${s.oldest ?? "—"}, newest ${s.newest ?? "—"}.`);
           return;
         }
+        if (cmd === "history") {
+          const rows = listRuns(cfg.root, { limit: 10 });
+          const reply = rows.length
+            ? `📜 Recent runs:\n${rows.map((r) => `- ${r.id} ${r.workflow_id} [${r.status}] ${r.started_at}`).join("\n")}`
+            : "No runs yet.";
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
+        if (cmd === "run" && rest[0]) {
+          const run = getRun(cfg.root, rest[0]);
+          if (!run) { await msg.reply(`No run '${rest[0]}'.`); return; }
+          const reply = `📦 Run ${run.id} (${run.workflow_id}, ${run.status}):\n` +
+            run.steps.map((s) => `- ${s.step_id} [${s.type}] ${s.status}: ${String(s.raw_text).slice(0, 200)}`).join("\n");
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
+        if (cmd === "todo" && rest.length) {
+          const id = addTodo(cfg.root, { text: rest.join(" "), user: msg.author.tag, channelId: msg.channelId });
+          await msg.reply(`✅ Todo saved \`${id}\`.`);
+          return;
+        }
+        if (cmd === "todos") {
+          const rows = listTodos(cfg.root, {});
+          const reply = rows.length
+            ? `📋 Open todos:\n${rows.map((t) => `- \`${t.id}\` [${t.priority}] ${t.text}${t.due ? ` (due ${t.due.slice(0, 16).replace("T", " ")})` : ""}`).join("\n")}`
+            : "No open todos.";
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
+        if (cmd === "done" && rest[0]) {
+          await msg.reply(completeTodo(cfg.root, rest[0]) ? `✅ Done \`${rest[0]}\`.` : `No open todo \`${rest[0]}\`.`);
+          return;
+        }
+        if (cmd === "remind" && rest.length >= 2) {
+          // !remind <ISO datetime> <text>  e.g. !remind 2026-10-27T12:00 fill the form
+          const [at, ...words] = rest;
+          if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(at)) {
+            await msg.reply("Usage: `!remind 2026-10-27T12:00 <text>` — or just say `@Harness remind me to … at 12pm tomorrow`.");
+            return;
+          }
+          const id = addReminder(cfg.root, { text: words.join(" "), at, user: msg.author.tag, channelId: msg.channelId });
+          await msg.reply(`⏰ Reminder set \`${id}\` for ${at}.`);
+          return;
+        }
+        if (cmd === "reminders") {
+          const rows = listReminders(cfg.root, {});
+          const reply = rows.length
+            ? `⏰ Pending reminders:\n${rows.map((r) => `- \`${r.id}\` @ ${r.at.slice(0, 16).replace("T", " ")}: ${r.text}`).join("\n")}`
+            : "No pending reminders.";
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
+        if (cmd === "automations" || cmd === "workflows" || cmd === "list") {
+          const reply = `⚙️ Automations (say "run <id>" or \`!<command>\`):\n${workflowCatalog(cfg)}`;
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
         const wf = cfg.workflows.find(
           (w) => w.trigger?.type === "discord" && w.trigger?.command === cmd
         );
         if (wf) {
           await msg.channel.sendTyping().catch(() => {});
+          const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
           await deps.runWorkflow(wf, {
             kind: "discord",
             command: cmd,
             text: rest.join(" "),
             user: msg.author.tag,
             channelId: msg.channelId,
-          }, msg.channelId);
+          }, msg.channelId, replyTo);
+          return;
+        }
+        // Unknown !command: don't silently ignore — show what's actually available
+        {
+          const reply = `❓ Unknown command \`!${cmd}\`.\n\n⚙️ Automations:\n${workflowCatalog(cfg)}\n\nBuilt-ins: !remember !recall !memory !history !run <id> !automations`;
+          for (const part of chunk(reply)) await msg.reply(part);
           return;
         }
       }
@@ -71,13 +137,9 @@ export function startDiscord(cfg, deps) {
         .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
         .trim() || "Hello";
       await msg.channel.sendTyping().catch(() => {});
-      // Persist + recall: every mention/DM is saved, relevant past context is injected
-      saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text: prompt, channelId: msg.channelId });
-      const hits = searchMemory(cfg.root, prompt, 5).filter((h) => h.text !== prompt);
-      const memCtx = formatMemories(hits);
-      const reply = await chatWithTools(cfg, "assistant", `User ${msg.author.tag} says: ${prompt}`, { extraContext: memCtx });
-      saveMemory(cfg.root, { kind: "reply", user: "TabBot", text: reply.slice(0, 500), channelId: msg.channelId });
-      for (const part of chunk(reply)) await msg.reply(part);
+      // Rick: classify simple-fact vs big-task; pipelines report back in-channel
+      await handleRickMessage(cfg, deps, msg, prompt);
+      return;
     } catch (err) {
       deps.log?.(`[discord] message handler failed: ${err.message}`);
       try { await msg.reply("Sorry — that failed. Check the Tab logs."); } catch {}

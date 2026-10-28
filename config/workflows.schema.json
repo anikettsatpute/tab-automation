@@ -17,9 +17,11 @@
           "trigger": {
             "type": "object",
             "properties": {
-              "type": { "enum": ["schedule", "discord", "manual"] },
+              "type": { "enum": ["schedule", "discord", "manual", "event"] },
               "cron": { "type": "string", "description": "5-field cron 'm h dom mon dow' when type=schedule." },
+              "everyMinutes": { "type": "number", "description": "Fire every N minutes when type=schedule (30s loop checks)." },
               "command": { "type": "string", "description": "Discord command word after ! e.g. 'review' when type=discord." },
+              "rule": { "type": "string", "description": "Event rule matched against trigger payload when type=event." },
               "description": { "type": "string" }
             }
           },
@@ -30,10 +32,15 @@
               "required": ["id", "type"],
               "properties": {
                 "id": { "type": "string" },
-                "type": { "enum": ["agent", "discord_send", "condition", "delay", "http", "log", "finance", "web", "remember", "recall"] },
+                "type": { "enum": ["agent", "run_agent", "task", "create_task", "file_request", "notify", "run_automation", "wait", "discord_send", "condition", "delay", "http", "log", "finance", "web", "remember", "recall", "subflow", "transform", "digest"] },
                 "agent": { "type": "string" },
                 "tools": { "type": "boolean", "description": "agent step: allow web tool calls. Default true." },
                 "memory": { "type": "boolean", "description": "agent step: inject relevant memories. Default true." },
+                "output": { "type": "string", "enum": ["text", "json"], "description": "agent step: text or parsed JSON vars." },
+                "outputSchema": { "type": "object", "description": "Max 8 vars bool|int|string.", "maxProperties": 8 },
+                "workflow": { "type": "string", "description": "subflow step: target workflow id (cannot be self)." },
+                "prefix": { "type": "string", "description": "subflow step: prefix for imported step vars. Default = target id." },
+                "template": { "type": "string", "description": "transform step: template with {{steps.*}} refs." },
                 "action": { "type": "string", "description": "web step: search | fetch | news." },
                 "query": { "type": "string", "description": "web/recall step input (templates allowed)." },
                 "count": { "type": "integer", "description": "web search max results." },
@@ -50,7 +57,7 @@
                   "type": "object",
                   "properties": {
                     "left": { "type": "string" },
-                    "operator": { "enum": ["contains", "not_contains", "equals", "not_equals", "matches", "longer_than"] },
+                    "operator": { "enum": ["contains", "not_contains", "equals", "not_equals", "matches", "longer_than", "is_true", "is_false"] },
                     "right": { "type": "string" }
                   }
                 },
