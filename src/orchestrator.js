@@ -5,105 +5,73 @@
  * Pure logic, no deps. Used by headless-dashboard control APIs + task divider.
  */
 
-export const TASK_TYPES_CONFIG = {
-  let_divider_choose: {
-    label: "Let the divider choose",
-    description: "Autonomous planner assesses the goal and assigns the optimal pipeline.",
-    pipeline: ["Planner", "Coder", "Validator", "Open PR"],
-  },
-  coding: {
-    label: "Coding",
-    description: "Standard development flow from architectural plan to PR creation.",
-    pipeline: ["Planner", "Coder", "Validator", "Open PR"],
-  },
-  pm_spec_design_coding: {
-    label: "PM spec, design and coding",
-    description: "Full stack product requirement writing, UI concept design, and implementation.",
-    pipeline: ["PM Spec", "Designer", "Planner", "Coder", "Validator", "Open PR"],
-  },
-  design_and_coding: {
-    label: "Design and coding",
-    description: "UX wireframing, design tokens, and frontend code delivery.",
-    pipeline: ["Designer", "Coder", "Validator", "Open PR"],
-  },
-  live_site_investigation: {
-    label: "Live-site investigation",
-    description: "Query telemetry, logs, tenant state diffs without mutating code.",
-    pipeline: ["Investigator", "Synthesizer"],
-  },
-  live_site_triage: {
-    label: "Live-site triage",
-    description: "Assess blast radius, error volume, post summary to channel.",
-    pipeline: ["Triage Agent", "Reporter"],
-  },
-  live_site_fix: {
-    label: "Live-site fix",
-    description: "Urgent hotfix pipeline with expedited validation.",
-    pipeline: ["Root Cause Coder", "Flight Validator", "Hotfix PR"],
-  },
-  icm_triage: {
-    label: "IcM triage",
-    description: "Ingest active incident, check linked deployments, update ticket.",
-    pipeline: ["IcM Investigator", "Ticket Updater"],
-  },
-  ecs_flight: {
-    label: "ECS flight",
-    description: "Create, bump, or rollback experiment flight rules.",
-    pipeline: ["Flight Configurator", "Ring Validator"],
-  },
-  simple_coding: {
-    label: "Simple coding",
-    description: "Direct code modification without formal plan stage.",
-    pipeline: ["Coder", "Open PR"],
-  },
-  simple_coding_with_testing: {
-    label: "Simple coding with testing",
-    description: "Direct code edits verified with unit/scenario tests before PR.",
-    pipeline: ["Coder", "Validator", "Open PR"],
-  },
-  reviewed_coding: {
-    label: "Reviewed coding",
-    description: "Requires human sign-off at each step before next agent runs.",
-    pipeline: ["Planner (Review)", "Coder (Review)", "Validator (Review)", "Open PR"],
-  },
-  planning_only: {
-    label: "Planning only",
-    description: "Generates technical plan, test scenarios, risk matrix without coding.",
-    pipeline: ["Planner", "Reviewer"],
-  },
-  code_investigation: {
-    label: "Code investigation",
-    description: "Deep architectural trace to explain legacy behavior.",
-    pipeline: ["Code Investigator", "Report Generator"],
-  },
-  coding_with_declarative_scenario_tests: {
-    label: "Coding with declarative scenario tests",
-    description: "Generates cucumber/gherkin cases, then implements until passing.",
-    pipeline: ["Scenario Planner", "Coder", "Scenario Validator", "Open PR"],
-  },
-};
+/**
+ * Loop orchestrator — OUR agents are the pipeline (not the spec's 15 copied types).
+ * Agents come from config/agents.json. A Muse session is spawned per step/automation-step
+ * as the agent dispatcher; it writes JSON; our loop code reconciles that JSON into the DB.
+ * Pure logic, no deps. Used by headless-dashboard control APIs + divider.
+ */
 
-export function dividerPipeline(taskType) {
-  return (TASK_TYPES_CONFIG[taskType] || TASK_TYPES_CONFIG.let_divider_choose).pipeline;
-}
+// Agent pipeline: every step dispatches one of OUR configured agents.
+// The divider picks agents (not task types); the loop reconciles session JSON -> DB.
+export const AGENT_PIPELINE = ["assistant", "summarizer", "coder", "finance-india", "finance-us"];
 
-/** Heuristic divider: pick pipeline from goal text. Mirrors spec §4.5. */
+/** Divider: pick OUR agents from goal text (not spec task types). */
 export function divideGoal(goalText) {
   const t = String(goalText || "").toLowerCase();
-  if (/live.?site.*investig|kusto|telemetry|log.*volume|mismatch|sdf.*prod/i.test(t)) return "live_site_investigation";
-  if (/triage|blast radius|incident/i.test(t)) return "live_site_triage";
-  if (/hotfix|urgent fix/i.test(t)) return "live_site_fix";
-  if (/icm/i.test(t)) return "icm_triage";
-  if (/flight|ecs/i.test(t)) return "ecs_flight";
-  if (/pm.*spec|prd|design.*cod/i.test(t)) return "pm_spec_design_coding";
-  if (/design/i.test(t) && /cod/i.test(t)) return "design_and_coding";
-  if (/plan only|planning only|no cod/i.test(t)) return "planning_only";
-  if (/investigat|trace|explain.*code|why does/i.test(t)) return "code_investigation";
-  if (/scenario|gherkin|cucumber/i.test(t)) return "coding_with_declarative_scenario_tests";
-  if (/simple/i.test(t) && /test/i.test(t)) return "simple_coding_with_testing";
-  if (/simple|small|trivial|one-line/i.test(t)) return "simple_coding";
-  if (/review.*each|human.*sign|reviewed/i.test(t)) return "reviewed_coding";
-  return "coding";
+  if (/summar|brief|tldr|compress/i.test(t)) return ["summarizer"];
+  if (/review|diff|patch|code/i.test(t)) return ["coder"];
+  if (/nse|bse|india|nifty|sensex/i.test(t)) return ["finance-india"];
+  if (/nyse|nasdaq|us market|s&p/i.test(t)) return ["finance-us"];
+  return ["assistant"];
+}
+
+/** Pipeline for a task = the agents assigned to it (stored on the task row). */
+export function dividerPipeline(taskTypeOrAgents) {
+  if (Array.isArray(taskTypeOrAgents)) return taskTypeOrAgents;
+  if (typeof taskTypeOrAgents === "string" && AGENT_PIPELINE.includes(taskTypeOrAgents)) return [taskTypeOrAgents];
+  return ["assistant"];
+}
+
+/** JSON contract: every Muse session MUST return this shape so the loop can reconcile. */
+export const SESSION_JSON_CONTRACT = {
+  status: "done|failed|blocked",
+  summary: "one-line what happened",
+  output: "main result text",
+  next: "suggested next agent id or empty",
+  updates: { progress: 0, tokens: 0 },
+};
+
+export function sessionPrompt({ agent, taskTitle = "", stepGoal = "", context = "" }) {
+  return (
+    "You are the '" + agent + "' step of a task loop. Goal: " + taskTitle + "\n" +
+    (stepGoal ? "This step: " + stepGoal + "\n" : "") +
+    (context ? "Context:\n" + String(context).slice(0, 3000) + "\n" : "") +
+    "\nRespond with ONLY valid JSON, no other text, no code fences, exactly this shape:\n" +
+    JSON.stringify(SESSION_JSON_CONTRACT, null, 1)
+  );
+}
+
+/** Reconcile session JSON into DB updates. Returns { ok, patch } — caller writes via updateTask/saveTaskSteps. */
+export function reconcileSessionJson(raw) {
+  let parsed;
+  try {
+    const clean = String(raw ?? "").trim().replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\`\`\`\s*$/i, "").trim();
+    parsed = JSON.parse(clean);
+  } catch (err) {
+    return { ok: false, error: "session JSON parse failed: " + err.message, patch: null };
+  }
+  const status = ["done", "failed", "blocked"].includes(parsed.status) ? parsed.status : "done";
+  const patch = {
+    status,
+    summary: String(parsed.summary || "").slice(0, 1000),
+    output: String(parsed.output || parsed.summary || "").slice(0, 8000),
+    next: String(parsed.next || ""),
+    progress: Number(parsed?.updates?.progress) || 0,
+    tokens: Number(parsed?.updates?.tokens) || 0,
+  };
+  if (status === "blocked") patch.blocked_reason = patch.summary;
+  return { ok: true, error: null, patch };
 }
 
 export function requeueFromStep(task, stepIndex, userGuidance = "") {

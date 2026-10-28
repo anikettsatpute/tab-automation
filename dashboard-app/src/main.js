@@ -14,7 +14,7 @@ const S = {
   approvals: [], todos: [], reminders: [], feed: null, brain: null, flows: [],
   requests: [], outbox: [], retro: null,
   q: "", auto: true, timer: null, logLevel: "", showReq: false, reqMode: "request",
-  reqType: "let_divider_choose", reqRepo: "tab-automation", reqBusy: false, reqMsg: "",
+  reqAgents: ["assistant"], reqRepo: "tab-automation", reqBusy: false, reqMsg: "",
   expandedSteps: new Set(), expandedVariants: new Set(), rerunText: "",
   brainSel: null, brainTab: "details", brainQ: "", flowSel: null,
   flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "", flowRule: "",
@@ -25,27 +25,9 @@ const S = {
   showCtx: false, sessIdx: 0, diagFull: false, reqChanges: "", appendTitle: "",
   paused: false,
 };
-// PRD 4.5 task-type taxonomy (reference: TASK_TYPES_CONFIG in spec state-machine)
-const TASK_TYPE_OPTS = [
-  ["let_divider_choose", "Let the divider choose"], ["coding", "Coding"],
-  ["pm_spec_design_coding", "PM spec, design and coding"], ["design_and_coding", "Design and coding"],
-  ["live_site_investigation", "Live-site investigation"], ["live_site_triage", "Live-site triage"],
-  ["live_site_fix", "Live-site fix"], ["icm_triage", "IcM triage"], ["ecs_flight", "ECS flight"],
-  ["simple_coding", "Simple coding"], ["simple_coding_with_testing", "Simple coding with testing"],
-  ["reviewed_coding", "Reviewed coding"], ["planning_only", "Planning only"],
-  ["code_investigation", "Code investigation"], ["coding_with_declarative_scenario_tests", "Coding with declarative scenario tests"],
-];
-const PIPELINE_PREVIEW = {
-  let_divider_choose: "Planner → Coder → Validator → Open PR", coding: "Planner → Coder → Validator → Open PR",
-  pm_spec_design_coding: "PM Spec → Designer → Planner → Coder → Validator → Open PR",
-  design_and_coding: "Designer → Coder → Validator → Open PR",
-  live_site_investigation: "Investigator → Synthesizer", live_site_triage: "Triage Agent → Reporter",
-  live_site_fix: "Root Cause Coder → Flight Validator → Hotfix PR", icm_triage: "IcM Investigator → Ticket Updater",
-  ecs_flight: "Flight Configurator → Ring Validator", simple_coding: "Coder → Open PR",
-  simple_coding_with_testing: "Coder → Validator → Open PR", reviewed_coding: "Planner (Review) → Coder (Review) → Validator (Review) → Open PR",
-  planning_only: "Planner → Reviewer", code_investigation: "Code Investigator → Report Generator",
-  coding_with_declarative_scenario_tests: "Scenario Planner → Coder → Scenario Validator → Open PR",
-};
+// Agent pipeline: OUR agents from config/agents.json are the pipeline.
+// The divider picks agents; each step spawns a Muse session that writes JSON.
+const AGENT_OPTS = ["assistant", "summarizer", "coder", "finance-india", "finance-us"];
 
 async function api(path, opts = {}) {
   const ctrl = new AbortController();
@@ -341,7 +323,7 @@ function requestsView() {
   return `<div class="card"><h3>Requests <span class="hint">${S.requests.length} intake</span></h3>
   <p class="hint">Raw goals awaiting / passed through the task-divider. Newest first.</p>
   ${S.requests.map((r) => `<div class="appr"><div class="row"><b>${esc(String(r.text || "").slice(0, 90))}</b><span class="spacer"></span><span class="tag ${r.status === "running" ? "run" : ""}">${esc(r.status || "queued")}</span></div>
-  <p class="hint">mode ${esc(r.mode)} · repo ${esc(r.repo)} · type ${esc(r.task_type)} · pipeline ${(JSON.parse(r.pipeline || "[]") || []).map(esc).join(" → ") || "—"} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || `<p class="hint">No requests yet — hit + New task.</p>`}</div>`;
+  <p class="hint">mode ${esc(r.mode)} · repo ${esc(r.repo)} · agents ${(JSON.parse(r.pipeline || "[]") || []).map(esc).join(" → ") || esc(r.task_type || "—")} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || `<p class="hint">No requests yet — hit + New task.</p>`}</div>`;
 }
 function outboxView() {
   return `<div class="card"><h3>Outbox <span class="hint">${S.outbox.length} queued/sent</span></h3>
@@ -443,9 +425,9 @@ function reqModal() {
   <p class="hint">A raw goal. The task-divider grills it, decomposes it, and enqueues the tasks after you confirm.</p>
   <div class="row"><button class="btn sm ${S.reqMode === "request" ? "primary" : "ghost"}" id="reqm-req">Request</button><button class="btn sm ${S.reqMode === "direct" ? "primary" : "ghost"}" id="reqm-dir">Direct task</button></div>
   <label class="fld"><span>What should be built or fixed?</span><textarea id="req-text" rows="4" placeholder="Describe the outcome you want. Be concrete about done-ness."></textarea></label>
-  <div class="row"><label class="fld"><span>Repo</span><select id="req-repo"><option ${S.reqRepo === "— unset —" ? "selected" : ""}>— unset —</option><option ${S.reqRepo === "tab-automation" ? "selected" : ""}>tab-automation</option><option>EnhancedRestore</option><option>ConfigSync</option></select></label>
-  <label class="fld"><span>Task type</span><select id="req-type">${TASK_TYPE_OPTS.map(([v, l]) => `<option value="${v}" ${S.reqType === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
-  <p class="hint">Pipeline: <b>${S.reqMode === "direct" ? esc(PIPELINE_PREVIEW[S.reqType] || "—") : "Pending divider selection"}</b></p>
+  <div class="row"><label class="fld"><span>Repo</span><select id="req-repo"><option ${S.reqRepo === "— unset —" ? "selected" : ""}>— unset —</option><option ${S.reqRepo === "tab-automation" ? "selected" : ""}>tab-automation</option></select></label></div>
+  <label class="fld"><span>Agents (pipeline — each step spawns a Muse session)</span><div class="row">${AGENT_OPTS.map((a) => `<button class="btn sm ${S.reqAgents.includes(a) ? "primary" : "ghost"}" data-reqagent="${a}">${a}</button>`).join("")}</div></label>
+  <p class="hint">Pipeline: <b>${S.reqMode === "direct" ? esc(S.reqAgents.join(" → ") || "—") : "Divider picks agents from goal"}</b> · sessions write JSON, loop reconciles to DB.</p>
   <label class="fld"><span>Attach files (screenshots, logs — names only, stored alongside run)</span><input id="req-files" placeholder="e.g. screenshot.png, trace.log"></label>
   ${S.reqMsg ? `<p class="hint">${esc(S.reqMsg)}</p>` : ""}
   <div class="row"><button class="btn primary" id="req-go" ${S.reqBusy ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : "Enqueue Task"}</button></div></div></div>`;
@@ -474,7 +456,7 @@ function render() {
   // loop task tables wiring
   $$("[data-loop]").forEach((b) => (b.onclick = async () => { S.loopSel = b.dataset.loop; S.loopDetail = null; render(); loadLoopDetail(S.loopSel); }));
   const lx = $("#loopx"); if (lx) lx.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
-  const ln = $("#loopnew"); if (ln) ln.onclick = async () => { const t = prompt("Loop task title:"); if (!t) return; const r = await api("/api/control/loop-tasks", { method: "POST", body: JSON.stringify({ title: t, repo: "tab-automation", task_type: "coding", status: "open" }) }); S.loopSel = r.id; tick(true); };
+  const ln = $("#loopnew"); if (ln) ln.onclick = async () => { const t = prompt("Loop task title:"); if (!t) return; const r = await api("/api/control/loop-tasks", { method: "POST", body: JSON.stringify({ title: t, repo: "tab-automation", task_type: "assistant", status: "open" }) }); S.loopSel = r.id; tick(true); };
   $$("[data-loopx]").forEach((b) => (b.onclick = () => { const k = "L" + b.dataset.loopx; S.expandedSteps.has(k) ? S.expandedSteps.delete(k) : S.expandedSteps.add(k); render(); }));
   $$("[data-looprun]").forEach((b) => (b.onclick = async () => {
     const i = +b.dataset.looprun; const d = S.loopDetail; if (!d) return;
@@ -638,13 +620,13 @@ function wireReq() {
   const rx = $("#reqx"); if (rx) rx.onclick = () => { S.showReq = false; S.reqMsg = ""; render(); };
   const mr = $("#reqm-req"); if (mr) mr.onclick = () => { S.reqMode = "request"; render(); wireReq(); };
   const md = $("#reqm-dir"); if (md) md.onclick = () => { S.reqMode = "direct"; render(); wireReq(); };
-  const rt = $("#req-type"); if (rt) rt.onchange = () => { S.reqType = rt.value; render(); wireReq(); };
+  $$("[data-reqagent]").forEach((b) => (b.onclick = () => { const a = b.dataset.reqagent; S.reqAgents.includes(a) ? S.reqAgents = S.reqAgents.filter((x) => x !== a) : S.reqAgents.push(a); if (!S.reqAgents.length) S.reqAgents = [a]; render(); wireReq(); }));
   const rr = $("#req-repo"); if (rr) rr.onchange = () => { S.reqRepo = rr.value; render(); wireReq(); };
   const g = $("#req-go"); if (g) g.onclick = async () => {
     const t = $("#req-text").value.trim(); if (!t || S.reqBusy) return;
     S.reqBusy = true; S.reqMsg = "Divider working…"; render(); wireReq();
     try {
-      const r = await api("/api/control/requests", { method: "POST", body: JSON.stringify({ text: t, mode: S.reqMode, repo: S.reqRepo === "— unset —" ? "tab-automation" : S.reqRepo, taskType: S.reqType }) });
+      const r = await api("/api/control/requests", { method: "POST", body: JSON.stringify({ text: t, mode: S.reqMode, repo: S.reqRepo === "— unset —" ? "tab-automation" : S.reqRepo, agents: S.reqAgents }) });
       S.reqBusy = false; S.showReq = false; S.reqMsg = "";
       S.view = "board"; S.boardTab = "tasks"; S.sel = r.runId; S.detail = null;
       render(); if (r.runId) loadDetail(r.runId); else tick(true);

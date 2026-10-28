@@ -89,21 +89,47 @@ export async function agentCreateTool(cfg, agent, { need, testArgs }, opts = {})
 // dispatchAgent: loop-engine entry point. Model selection stays in configuration:
 // per-call `model` > agent.model/deployment (env: supported) > provider.modelDefault.
 // Empty prompt falls back to agent.defaultPrompt (config/agents.json).
-export async function dispatchAgent(cfg, { agent = "assistant", model = "", prompt = "", extraContext = "", toolCtx = {}, useTools = true } = {}) {
+//
+// Muse session model: every step/automation-step spawns ONE session as the agent
+// dispatcher. The session writes JSON (SESSION_JSON_CONTRACT); our loop code
+// reconciles that JSON into the DB (tasks/task_steps/runs). The session never
+// writes the DB directly.
+export async function dispatchAgent(cfg, { agent = "assistant", model = "", prompt = "", extraContext = "", toolCtx = {}, useTools = true, jsonContract = true } = {}) {
   const base = cfg.agents.get(agent);
   if (!base) throw new Error(`Unknown agent '${agent}'`);
   const text = String(prompt ?? "").trim() || String(base.defaultPrompt ?? "").trim();
   if (!text) throw new Error(`Empty prompt and no defaultPrompt for agent '${agent}'`);
   const effective = model?.trim() ? { ...base, model: model.trim() } : base;
   const effCfg = { ...cfg, agents: new Map(cfg.agents).set(agent, effective) };
+  // Wrap the prompt so the session returns reconciliable JSON.
+  const { sessionPrompt } = await import("./orchestrator.js");
+  const finalPrompt = jsonContract
+    ? `${text}\n\n---\n${sessionPrompt({ agent, taskTitle: toolCtx.taskTitle || "", stepGoal: toolCtx.stepGoal || "", context: extraContext })}`
+    : (extraContext ? `${text}\n\nContext:\n${extraContext}` : text);
+  const sessionId = `${toolCtx.runId || "adhoc"}:${agent}:${Date.now().toString(36)}`;
+  const t0 = Date.now();
+  let raw;
   if (!useTools) {
     const resolved = resolveProvider(effCfg, effective);
-    return plainCall(effCfg, effective, [
+    raw = await plainCall(effCfg, effective, [
       { role: "system", content: base.systemPrompt },
-      { role: "user", content: text },
+      { role: "user", content: finalPrompt },
     ], { resolved });
+  } else {
+    raw = await chatWithTools(effCfg, agent, finalPrompt, { extraContext: "", toolCtx });
   }
-  return chatWithTools(effCfg, agent, text, { extraContext, toolCtx });
+  // Reconcile: parse session JSON -> DB patch. Raw text preserved for audit.
+  const { reconcileSessionJson } = await import("./orchestrator.js");
+  const rec = jsonContract ? reconcileSessionJson(raw) : { ok: true, patch: { status: "done", summary: String(raw).slice(0, 300), output: String(raw).slice(0, 8000), next: "", progress: 0, tokens: 0 } };
+  try {
+    const { recordActivity } = await import("./db.js");
+    recordActivity(cfg.root, {
+      runId: toolCtx.runId || null, kind: "session", actor: agent,
+      action: `session:${sessionId}`, detail: `contract=${jsonContract ? "json" : "raw"} ok=${rec.ok} status=${rec.patch?.status || "?"}`,
+      durationMs: Date.now() - t0, status: rec.ok ? "ok" : "failed",
+    });
+  } catch {}
+  return { sessionId, agent, model: effective.model || "", raw, ...rec };
 }
 export async function chatWithTools(cfg, agentId, userPrompt, { extraContext = "", toolCtx = {} } = {}) {
   const agent = cfg.agents.get(agentId);

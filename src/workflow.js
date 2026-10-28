@@ -196,32 +196,56 @@ async function runStep(cfg, deps, step, ctx) {
       if (step.output === "json" && step.outputSchema) prompt += jsonPromptSuffix(step.outputSchema);
       const mem = step.memory === false ? "" : formatMemories(searchMemory(cfg.root, prompt, 4));
       const tAgent = Date.now();
-      // Loop dispatch: model selection lives in configuration (agent.model >
-      // provider.modelDefault), empty prompt falls back to agent.defaultPrompt.
+      // Loop dispatch: ONE Muse session per step as the agent dispatcher.
+      // Session writes JSON (SESSION_JSON_CONTRACT); our loop reconciles it into the DB.
+      // Model selection lives in configuration (step.model > agent.model > provider.modelDefault).
       const { dispatchAgent } = await import("./agent.js");
-      const out = await dispatchAgent(cfg, {
+      const session = await dispatchAgent(cfg, {
         agent: step.agent || "assistant", model: step.model || "",
         prompt, extraContext: mem,
-        toolCtx: { runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "" },
+        toolCtx: {
+          runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "",
+          taskTitle: ctx.trigger?.text || ctx.workflow, stepGoal: step.id,
+        },
         useTools: step.tools !== false,
+        jsonContract: step.jsonContract !== false,
       });
-      // Session record (reference: PRD 4.4 Sessions tab + IMPLEMENTATION 2.2 agentSessions).
+      const out = session.raw;
+      const patch = session.patch || null;
+      // Session record (reference: Sessions tab + agentSessions).
       try {
         const { recordAgentSession } = await import("./db.js");
         recordAgentSession(cfg.root, ctx._runId, {
-          stepNumber: ctx._stepIdx ?? 0, sessionUuid: `${ctx._runId}-${step.id}`,
+          stepNumber: ctx._stepIdx ?? 0, sessionUuid: session.sessionId,
           runnerType: "tab-automation", agentRole: step.agent || "assistant",
           model: step.model || cfg.agents?.get?.(step.agent)?.model || cfg.agents?.get?.(step.agent)?.deployment || "",
           workspace: "tab-automation",
         });
       } catch {}
       try {
-        recordActivity(cfg.root, { runId: ctx._runId, kind: "tool", actor: step.agent || ctx.workflow, action: `agent:${step.agent || "assistant"}`, detail: String(prompt).slice(0, 300), durationMs: Date.now() - tAgent, status: "ok" });
+        recordActivity(cfg.root, { runId: ctx._runId, kind: "tool", actor: step.agent || ctx.workflow, action: `agent:${step.agent || "assistant"}`, detail: String(prompt).slice(0, 300), durationMs: Date.now() - tAgent, status: session.ok ? "ok" : "failed" });
       } catch {}
-      let stored = out;
-      let outputJson = null;
+      // Reconcile session JSON into the run: status/summary/output/next/updates.
+      if (session.ok && patch) {
+        try {
+          const { bumpRunStats } = await import("./db.js");
+          if (patch.tokens) bumpRunStats(cfg.root, ctx._runId, { tokens: patch.tokens });
+        } catch {}
+        if (patch.next) ctx.steps[`${step.id}.next`] = patch.next;
+        if (patch.status === "blocked" || patch.status === "failed") {
+          persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: patch, agent: step.agent });
+          if (step.saveAs) ctx.steps[step.saveAs] = patch;
+          ctx.steps[step.id] = patch;
+          throw new Error(`Step ${step.id}: session reported ${patch.status} — ${patch.summary}`);
+        }
+      } else if (!session.ok) {
+        persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: { _parseError: session.error }, agent: step.agent });
+        throw new Error(`Step ${step.id}: session JSON invalid (${session.error})`);
+      }
+      let stored = patch?.output ?? out;
+      let outputJson = patch || null;
       if (step.output === "json") {
-        const parsed = parseJsonOutput(out, step.outputSchema);
+        const parsed = parseJsonOutput(patch?.output ?? out, step.outputSchema);
         if (parsed.ok) {
           stored = parsed.value;
           outputJson = parsed.value;

@@ -352,35 +352,36 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  // Submit a request: task-divider intake (reference: PRD 4.5 Submit a request modal).
-  // mode=request -> divider picks pipeline; mode=direct -> pipeline from taskType.
+  // Submit a request: divider picks OUR agents (not spec task types).
+  // mode=request -> divider picks agents; mode=direct -> agents from body.
+  // Each step spawns a Muse session; session JSON is reconciled into the DB by the loop.
   app.post("/api/control/requests", async (c) => {
     try {
-      const { text, mode, repo, taskType } = await c.req.json().catch(() => ({}));
+      const { text, mode, repo, agents } = await c.req.json().catch(() => ({}));
       if (!text || !String(text).trim()) return c.json({ error: "text required" }, 400);
-      const { divideGoal, dividerPipeline, TASK_TYPES_CONFIG } = await import("./orchestrator.js");
+      const { divideGoal, dividerPipeline, AGENT_PIPELINE } = await import("./orchestrator.js");
       const { runWorkflow } = await import("./workflow.js");
       const cleanMode = mode === "direct" ? "direct" : "request";
       const picked = cleanMode === "direct"
-        ? (TASK_TYPES_CONFIG[taskType] ? taskType : "coding")
+        ? (Array.isArray(agents) ? agents.filter((a) => AGENT_PIPELINE.includes(a)) : [])
         : divideGoal(text);
-      const pipeline = dividerPipeline(picked);
-      const requestId = fileRequest(root, { text: String(text).slice(0, 4000), mode: cleanMode, repo: repo || "tab-automation", taskType: picked, pipeline });
-      // Enqueue as a real workflow run: divider step (records choice) + agent steps per pipeline.
+      const pipeline = dividerPipeline(picked.length ? picked : ["assistant"]);
+      const requestId = fileRequest(root, { text: String(text).slice(0, 4000), mode: cleanMode, repo: repo || "tab-automation", taskType: pipeline.join(","), pipeline });
+      // Enqueue as a real workflow run: divider step + one agent session per picked agent.
       const steps = [
-        { id: "divider", type: "log", text: `Task-divider: mode=${cleanMode} picked '${picked}' -> ${pipeline.join(" -> ")}` },
-        ...pipeline.slice(0, 6).map((stage, i) => ({
-          id: `stage-${i + 1}-${stage.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-          type: "agent", agent: "assistant",
-          prompt: `OrchestratorLoop stage ${i + 1}/${pipeline.length} (${stage}) for request ${requestId}.\nGoal: ${String(text).slice(0, 1500)}\nDo the ${stage} work now, concretely.`,
+        { id: "divider", type: "log", text: `Divider: mode=${cleanMode} picked agents ${pipeline.join(" -> ")}` },
+        ...pipeline.slice(0, 6).map((agent, i) => ({
+          id: `stage-${i + 1}-${agent}`,
+          type: "agent", agent,
+          prompt: `Request ${requestId} step ${i + 1}/${pipeline.length} as '${agent}'.\nGoal: ${String(text).slice(0, 1500)}\nDo the ${agent} work now, concretely.`,
         })),
       ];
       const wf = { id: `request-${requestId}`, name: `Request ${requestId}`, trigger: { type: "manual" }, steps };
-      const trigger = { kind: "dashboard-request", text: String(text).slice(0, 1000), user: "dashboard", requestId, taskType: picked };
+      const trigger = { kind: "dashboard-request", text: String(text).slice(0, 1000), user: "dashboard", requestId, agents: pipeline };
       const ctx = await runWorkflow(cfg, { log, sendDiscord: async () => {} }, wf, trigger);
       try { linkRequestRun(root, requestId, ctx._runId || null); } catch {}
-      try { writeLog(root, { level: "info", source: "dashboard-request", message: `request ${requestId} -> ${picked} (${pipeline.join("->")})`, runId: ctx._runId || null }); } catch {}
-      return c.json({ ok: true, requestId, taskType: picked, pipeline, runId: ctx._runId || null });
+      try { writeLog(root, { level: "info", source: "dashboard-request", message: `request ${requestId} -> agents ${pipeline.join("->")}`, runId: ctx._runId || null }); } catch {}
+      return c.json({ ok: true, requestId, agents: pipeline, pipeline, runId: ctx._runId || null });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
   app.get("/api/control/requests", (c) => {
