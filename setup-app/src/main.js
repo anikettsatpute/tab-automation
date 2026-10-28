@@ -53,35 +53,41 @@ function toast(msg, kind = "ok") {
   $(".toast")?.remove();
   const d = document.createElement("div");
   d.className = `toast ${kind}`;
+  d.setAttribute("role", kind === "bad" ? "alert" : "status");
   d.textContent = msg;
   document.body.appendChild(d);
+  const st = $("#status");
+  if (st) st.textContent = msg;
   setTimeout(() => d.remove(), 4500);
 }
 
 // ---------- shell ----------
 function render() {
   const doneCount = S.done.size;
+  const pct = Math.round((doneCount / STEPS.length) * 100);
   $("#app").innerHTML = `
+    <a class="skip" href="#panel">Skip to setup panel</a>
     <div class="shell">
-      <div class="topbar">
-        <div class="logo">🤖</div>
+      <header class="topbar">
+        <div class="logo" aria-hidden="true">🤖</div>
         <div>
           <h1>Rick Setup</h1>
           <p class="sub">Clone → <span class="kbd">npm install</span> → <span class="kbd">npm run setup</span> → you're live.</p>
         </div>
         <div class="spacer"></div>
-        ${S.node ? `<span class="pill ${S.node.ok ? "ok" : "bad"}">Node ${esc(S.node.version)} ${S.node.ok ? "✓" : "✗ needs 22+"}</span>` : ""}
-      </div>
-      <div class="progress"><div style="width:${Math.round((doneCount / STEPS.length) * 100)}%"></div></div>
-      <div class="stepper">
-        ${STEPS.map((s) => `<button class="step ${S.tab === s.id ? "active" : ""} ${S.done.has(s.id) ? "done" : ""}" data-tab="${s.id}"><span class="n">${s.n}</span><span class="t">${s.t}</span></button>`).join("")}
-      </div>
-      <div id="panel"></div>
+        ${S.node ? `<span class="pill ${S.node.ok ? "ok" : "bad"}" role="status">Node ${esc(S.node.version)} ${S.node.ok ? "OK" : "needs 22+"}</span>` : ""}
+      </header>
+      <div class="progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Setup progress"><div style="width:${pct}%"></div></div>
+      <nav class="stepper" aria-label="Setup steps">
+        ${STEPS.map((s) => `<button type="button" class="step ${S.tab === s.id ? "active" : ""} ${S.done.has(s.id) ? "done" : ""}" data-tab="${s.id}" ${S.tab === s.id ? 'aria-current="step"' : ""}><span class="n">${s.n}</span><span class="t">${s.t}</span></button>`).join("")}
+      </nav>
+      <main id="panel" tabindex="-1"></main>
       <div class="footer-nav">
-        <button class="btn ghost" id="prev">← Back</button>
-        <button class="btn primary" id="next">Continue →</button>
+        <button type="button" class="btn ghost" id="prev">Back</button>
+        <button type="button" class="btn primary" id="next">Continue</button>
       </div>
-    </div>`;
+    </div>
+    <div id="status" class="sr" role="status" aria-live="polite"></div>`;
   $$(".step").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; render(); }));
   $("#prev").onclick = () => step(-1);
   $("#next").onclick = () => step(1);

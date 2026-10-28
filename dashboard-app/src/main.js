@@ -75,14 +75,14 @@ function sidebar() {
   const queued = Math.max(0, (t.runs || 0) - (t.running || 0) - (t.done || 0) - (t.failed || 0));
   const stats = [["Queued", queued, ""], ["Running", t.running ?? 0, "run"], ["Plan review", 0, ""], ["Size review", 0, ""], ["Your review", 0, ""], ["PR review", S.tasks.filter((r) => r.prUrl).length, "review"], ["Blocked", t.failed ?? 0, "bad"], ["Done", t.done ?? 0, "ok"]];
   return `
-  <aside class="side">
-    <div class="brand"><div class="logo">🤖</div><div><b>OrchestratorLoop</b><span>Task control plane</span></div></div>
-    <button class="btn primary block" id="newtask">+ New task</button>
-    <nav>${NAV.map(([v, l]) => `<button class="nav ${S.view === v ? "on" : ""}" data-view="${v}"><span>${esc(l)}</span>${counts[v] ? `<span class="ncount">${counts[v]}</span>` : ""}</button>`).join("")}</nav>
-    <div class="sstat"><h4>STATUS</h4>
-      ${stats.map(([l, c, cls]) => `<div class="srow2 ${S.statusFilter === l ? "on" : ""}" data-statusf="${esc(l)}"><i class="dot ${cls}"></i>${esc(l)} <b>${c}</b></div>`).join("")}
+  <aside class="side" aria-label="Primary navigation">
+    <div class="brand"><div class="logo" aria-hidden="true">🤖</div><div><b>OrchestratorLoop</b><span>Task control plane</span></div></div>
+    <button class="btn primary block" id="newtask" type="button">+ New task</button>
+    <nav aria-label="Views">${NAV.map(([v, l]) => `<button type="button" class="nav ${S.view === v ? "on" : ""}" data-view="${v}" ${S.view === v ? 'aria-current="page"' : ""}><span>${esc(l)}</span>${counts[v] ? `<span class="ncount" aria-label="${counts[v]} items">${counts[v]}</span>` : ""}</button>`).join("")}</nav>
+    <div class="sstat"><h4 id="status-h">STATUS</h4>
+      <div role="group" aria-labelledby="status-h">${stats.map(([l, c, cls]) => `<button type="button" class="srow2 ${S.statusFilter === l ? "on" : ""}" data-statusf="${esc(l)}" aria-pressed="${S.statusFilter === l}"><i class="dot ${cls}" aria-hidden="true"></i>${esc(l)} <b>${c}</b></button>`).join("")}</div>
     </div>
-    <div class="spal"><span>⌘ Command palette</span><kbd>⌘K</kbd></div>
+    <div class="spal"><span>Command palette</span><kbd>⌘K</kbd></div>
   </aside>`;
 }
 
@@ -91,16 +91,18 @@ function topbar() {
   const t = S.ov?.totals || {};
   return `
   <header class="top">
-    <div class="brand sm"><div class="logo">⚡</div><div><b>OrchestratorLoop</b><span>Task control plane</span></div></div>
+    <button type="button" class="btn sm ghost menubtn" id="menu" aria-label="Open navigation" aria-expanded="false">Menu</button>
+    <div class="brand sm"><div class="logo" aria-hidden="true">⚡</div><div><b>OrchestratorLoop</b><span>Task control plane</span></div></div>
     <span class="ws">tab-automation</span>
-    <input id="fq" placeholder="Filter tasks ( / )" value="${esc(S.q)}">
-    <button class="btn sm" id="cmds">⌘ Commands <kbd>⌘K</kbd></button>
-    <button class="btn sm ${S.auto ? "on" : ""}" id="autobtn">⚡ Auto</button>
-    <button class="btn sm" id="resume">${S.paused ? "▶ Resume" : "⏸ Pause"}</button>
-    <button class="btn sm ghost" id="refresh" title="Refresh now">🔄</button>
-    <button class="btn sm ghost" id="theme">${S.theme === "dark" ? "☀️" : "🌙"}</button>
+    <label class="sr" for="fq">Filter tasks</label>
+    <input id="fq" type="search" placeholder="Filter tasks ( / )" value="${esc(S.q)}" aria-label="Filter tasks" autocomplete="off">
+    <button type="button" class="btn sm" id="cmds" aria-haspopup="dialog">Commands <kbd aria-hidden="true">⌘K</kbd></button>
+    <button type="button" class="btn sm ${S.auto ? "on" : ""}" id="autobtn" aria-pressed="${S.auto}">Auto refresh</button>
+    <button type="button" class="btn sm" id="resume" aria-pressed="${S.paused}">${S.paused ? "Resume" : "Pause"}</button>
+    <button type="button" class="btn sm ghost" id="refresh" aria-label="Refresh now">Refresh</button>
+    <button type="button" class="btn sm ghost" id="theme" aria-label="Switch to ${S.theme === "dark" ? "light" : "dark"} theme" aria-pressed="${S.theme === "light"}">Theme</button>
     <span class="spacer"></span>
-    <span class="pill ok"><span class="pulse"></span>Live</span>
+    <span class="pill ok" role="status"><span class="pulse" aria-hidden="true"></span>Live</span>
   </header>`;
 }
 
@@ -108,9 +110,10 @@ function topbar() {
 function attentionBanners() {
   const blocked = S.tasks.find((r) => r.status === "failed" || r.blockedReason);
   const review = S.tasks.find((r) => r.prUrl);
-  return `<div class="banners">
-    ${blocked ? `<div class="banner bad" data-sel="${esc(blocked.id)}"><span class="pulse2"></span><b>${esc((blocked.title || "").slice(0, 70))}</b><span class="mono">#${esc(blocked.id.slice(0, 6))} • Blocked</span></div>` : ""}
-    ${review ? `<div class="banner review" data-sel="${esc(review.id)}"><span class="dot2"></span><b>${esc((review.title || "").slice(0, 70))}</b><span class="mono">#${esc(review.id.slice(0, 6))} • PR review</span></div>` : ""}
+  if (!blocked && !review) return "";
+  return `<div class="banners" role="alert">
+    ${blocked ? `<button type="button" class="banner bad" data-sel="${esc(blocked.id)}" aria-label="Blocked task: ${esc((blocked.title || "").slice(0, 70))}"><span class="pulse2" aria-hidden="true"></span><b>${esc((blocked.title || "").slice(0, 70))}</b><span class="mono">#${esc(blocked.id.slice(0, 6))} • Blocked</span></button>` : ""}
+    ${review ? `<button type="button" class="banner review" data-sel="${esc(review.id)}" aria-label="Task awaiting review: ${esc((review.title || "").slice(0, 70))}"><span class="dot2" aria-hidden="true"></span><b>${esc((review.title || "").slice(0, 70))}</b><span class="mono">#${esc(review.id.slice(0, 6))} • PR review</span></button>` : ""}
   </div>`;
 }
 
@@ -132,24 +135,23 @@ function boardView() {
   return `
   ${attentionBanners()}
   <div class="bhead"><h2>Board <span class="hint">${list.length} runs · ${lt.length} loop tasks</span></h2>
-    <div class="btabs"><button class="tab ${S.boardTab === "tasks" ? "on" : ""}" data-btab="tasks">Tasks</button>
-    <button class="tab ${S.boardTab === "runs" ? "on" : ""}" data-btab="runs">Automation runs</button>
-    <button class="tab ${S.boardTab === "loop" ? "on" : ""}" data-btab="loop">Loop tasks</button></div>
+    <div class="btabs" role="tablist" aria-label="Board view">${[["tasks", "Tasks"], ["runs", "Automation runs"], ["loop", "Loop tasks"]].map(([v, l]) => `<button type="button" role="tab" aria-selected="${S.boardTab === v}" class="tab ${S.boardTab === v ? "on" : ""}" data-btab="${v}">${l}</button>`).join("")}</div>
     <span class="spacer"></span>
+    <label class="sr" for="sortby">Sort tasks</label>
     <select id="sortby" class="sel"><option value="recent" ${S.sortBy === "recent" ? "selected" : ""}>Recent activity</option><option value="id" ${S.sortBy === "id" ? "selected" : ""}>By Task ID</option></select>
   </div>
   ${S.boardTab === "loop" ? loopTasksView(lt, lsel) : `
   <div class="board2">
     <div class="blist">
       ${list.map((r) => `
-      <div class="bcard ${S.sel === r.id ? "sel" : ""}" data-sel="${esc(r.id)}">
-        <div class="btop">${statusBadge(r.status)} <span class="hint">#${esc(r.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(r.startedAt)}</span></div>
-        <div class="btitle">${esc((r.title || r.workflow || "").slice(0, 100))}</div>
-        <div class="bmeta"><span class="kbd">${esc(r.repository || "tab-automation")}</span> <span class="kbd">${esc(r.taskType || r.kind || "")}</span> <span class="kbd">⑂ ${esc((r.branch || "").slice(0, 40))}</span></div>
-        <div class="bmeta"><span class="hint">${r.progress.completed}/${r.progress.total}</span>
-          ${r.tokens ? `<span class="hint">🎟${Number(r.tokens).toLocaleString()}</span>` : ""} ${r.toolCalls ? `<span class="hint">🔧${r.toolCalls}</span>` : ""}
-          ${r.commentsCount ? `<span class="hint">💬${r.commentsCount}</span>` : ""} ${r.prUrl ? `<span class="hint">🔀 PR</span>` : ""}</div>
-      </div>`).join("") || `<div class="empty">No tasks match.</div>`}
+      <button type="button" class="bcard ${S.sel === r.id ? "sel" : ""}" data-sel="${esc(r.id)}" aria-current="${S.sel === r.id}" aria-label="${esc((r.title || r.workflow || "task").slice(0, 80))} — ${esc(r.status)}">
+        <span class="btop">${statusBadge(r.status)} <span class="hint">#${esc(r.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(r.startedAt)}</span></span>
+        <span class="btitle">${esc((r.title || r.workflow || "").slice(0, 100))}</span>
+        <span class="bmeta"><span class="kbd">${esc(r.repository || "tab-automation")}</span> <span class="kbd">${esc(r.taskType || r.kind || "")}</span> <span class="kbd">branch ${esc((r.branch || "").slice(0, 40))}</span></span>
+        <span class="bmeta"><span class="hint">${r.progress.completed}/${r.progress.total} steps</span>
+          ${r.tokens ? `<span class="hint">${Number(r.tokens).toLocaleString()} tokens</span>` : ""} ${r.toolCalls ? `<span class="hint">${r.toolCalls} tool calls</span>` : ""}
+          ${r.commentsCount ? `<span class="hint">${r.commentsCount} comments</span>` : ""} ${r.prUrl ? `<span class="hint">PR linked</span>` : ""}</span>
+      </button>`).join("") || `<div class="empty" role="status">No tasks match the current filter. <button type="button" class="btn sm ghost" data-clearf>Clear filter</button></div>`}
     </div>
     <div class="bdetail">${sel ? detailPane(sel) : `<div class="empty">Select a task to inspect.</div>`}</div>
   </div>`}`;
@@ -158,13 +160,14 @@ function boardView() {
 // ---------- loop task tables (reference: tasks + task_steps tables) ----------
 function loopTasksView(lt, lsel) {
   return `<div class="board2"><div class="blist">
-    <button class="btn sm primary" id="loopnew">+ New loop task</button>
-    ${lt.map((t) => `<div class="bcard ${S.loopSel === t.id ? "sel" : ""}" data-loop="${esc(t.id)}">
-      <div class="btop">${statusBadge(t.status === "open" ? "queued" : t.status)} <span class="hint">#${esc(t.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(t.updated_at)}</span></div>
-      <div class="btitle">${esc((t.title || "").slice(0, 100))}</div>
-      <div class="bmeta"><span class="kbd">${esc(t.repo || "")}</span><span class="kbd">${esc(t.task_type || "")}</span><span class="kbd">⑂ ${esc((t.branch || "").slice(0, 30))}</span></div>
-      <div class="bmeta"><span class="hint">progress ${t.progress || 0}%</span>${t.tokens ? `<span class="hint">🎟${Number(t.tokens).toLocaleString()}</span>` : ""}${t.tool_calls ? `<span class="hint">🔧${t.tool_calls}</span>` : ""}</div>
-    </div>`).join("") || `<div class="empty">No loop tasks yet — create one above.</div>`}
+    <button type="button" class="btn sm primary" id="loopnew">+ New loop task</button>
+    ${S.loopForm ? `<div class="appr" role="dialog" aria-label="New loop task"><label class="fld"><span>Loop task title</span><input id="loop-title" value="${esc(S.loopForm.title || "")}" placeholder="What should this loop do?"></label><div class="row"><button type="button" class="btn sm primary" id="loopcreate">Create</button><button type="button" class="btn sm ghost" id="loopcancel">Cancel</button></div></div>` : ""}
+    ${lt.map((t) => `<button type="button" class="bcard ${S.loopSel === t.id ? "sel" : ""}" data-loop="${esc(t.id)}" aria-current="${S.loopSel === t.id}" aria-label="${esc((t.title || "loop task").slice(0, 80))} — ${esc(t.status)}">
+      <span class="btop">${statusBadge(t.status === "open" ? "queued" : t.status)} <span class="hint">#${esc(t.id.slice(0, 6))}</span><span class="spacer"></span><span class="hint">${ago(t.updated_at)}</span></span>
+      <span class="btitle">${esc((t.title || "").slice(0, 100))}</span>
+      <span class="bmeta"><span class="kbd">${esc(t.repo || "")}</span><span class="kbd">${esc(t.task_type || "")}</span><span class="kbd">branch ${esc((t.branch || "").slice(0, 30))}</span></span>
+      <span class="bmeta"><span class="hint">progress ${t.progress || 0}%</span>${t.tokens ? `<span class="hint">${Number(t.tokens).toLocaleString()} tokens</span>` : ""}${t.tool_calls ? `<span class="hint">${t.tool_calls} tool calls</span>` : ""}</span>
+    </button>`).join("") || `<div class="empty" role="status">No loop tasks yet — create one above.</div>`}
   </div><div class="bdetail">${lsel ? loopDetailPane(lsel) : `<div class="empty">Select a loop task to inspect steps.</div>`}</div></div>`;
 }
 function loopDetailPane(d) {
@@ -208,7 +211,7 @@ function detailPane(d) {
     ${(d.comments || []).length ? `<h4>Comments (${d.comments.length})</h4>` + d.comments.map((cm) => `<div class="appr"><div class="row"><b>${esc(cm.author)}</b><span class="hint">${esc(String(cm.created_at || "").slice(0, 16).replace("T", " "))}</span></div><p class="dim">${esc(cm.text)}</p></div>`).join("") : ""}`;
   else if (S.detailTab === "steps") body = d.steps.map((s, i) => `
     <div class="stepcard ${s.status === "failed" ? "bad" : ""}">
-      <div class="shead"><span class="snum">${i + 1}</span><b>${esc(s.id)}</b> <span class="kbd">${esc(s.type)}</span> ${s.agent ? `<span class="kbd">${esc(s.agent)}</span>` : ""}<span class="spacer"></span>${statusBadge(s.status === "ok" ? "done" : s.status)}<button class="btn ghost sm" data-xstep="${i}">›</button></div>
+      <div class="shead"><span class="snum" aria-hidden="true">${i + 1}</span><b>${esc(s.id)}</b> <span class="kbd">${esc(s.type)}</span> ${s.agent ? `<span class="kbd">${esc(s.agent)}</span>` : ""}<span class="spacer"></span>${statusBadge(s.status === "ok" ? "done" : s.status)}<button type="button" class="btn ghost sm" data-xstep="${i}" aria-expanded="${S.expandedSteps.has(i)}" aria-label="${S.expandedSteps.has(i) ? "Collapse" : "Expand"} step ${i + 1}">${S.expandedSteps.has(i) ? "Collapse" : "Expand"}</button></div>
       ${S.expandedSteps.has(i) ? `<div class="sbody"><p class="dim">${esc(s.text.slice(0, 800))}</p>
         <button class="btn sm ghost" data-xvar="${i}">▶ Full prompt sent to the agent — variant 1</button>
         ${S.expandedVariants.has(i) ? `<pre class="out">${esc(s.text.slice(0, 2000))}</pre>${s.output ? `<pre class="out">${esc(s.output.slice(0, 1000))}</pre>` : ""}` : ""}
@@ -235,22 +238,22 @@ function detailPane(d) {
       ${sess.map((s) => `<div class="srow"><b>${esc(s.agent)}</b><span class="kbd">${esc(s.model || "default")}</span><span class="hint">${esc(s.workspace || "")} · ${esc(s.context || "")} · ${s.steps ?? 1} steps</span></div>`).join("") || `<p class="hint">No sessions</p>`}</div>`;
   }
   return `
-  <div class="dhead"><span class="mono">#${esc(d.id.slice(0, 6))}</span> ${statusBadge(d.status)}<span class="spacer"></span><button class="btn ghost sm" id="dclose">✕</button></div>
+  <div class="dhead"><span class="mono">#${esc(d.id.slice(0, 6))}</span> ${statusBadge(d.status)}<span class="spacer"></span><button type="button" class="btn ghost sm" id="dclose" aria-label="Close task detail">Close</button></div>
   <div class="dtitle">${esc((d.title || "").slice(0, 120))}</div>
   <p class="hint">${esc(statusDesc)}</p>
-  <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div><div class="hint">${d.progress.completed}/${d.progress.total}</div>
-  <div class="pipe">${pipeStages(d)}</div>
-  <div class="dact"><button class="btn sm primary" data-act="req-changes">Request changes</button>${d.prUrl ? `<a class="btn sm" href="${esc(d.prUrl)}" target="_blank">Open PR ↗</a>` : ""}
-    <button class="btn sm" data-act="append">+ Append task</button><button class="btn sm" data-act="requeue">Re-queue</button><button class="btn sm danger" data-act="del">🗑 Delete</button></div>
+  <div class="pbar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Task progress"><div class="pfill" style="width:${pct}%"></div></div><div class="hint">${d.progress.completed}/${d.progress.total} steps complete</div>
+  <div class="pipe" aria-label="Pipeline stages">${pipeStages(d)}</div>
+  <div class="dact"><button type="button" class="btn sm primary" data-act="req-changes">Request changes</button>${d.prUrl ? `<a class="btn sm" href="${esc(d.prUrl)}" target="_blank" rel="noopener">Open PR</a>` : ""}
+    <button type="button" class="btn sm" data-act="append">Append task</button><button type="button" class="btn sm" data-act="requeue">Re-queue</button><button type="button" class="btn sm danger" data-act="del">Delete</button></div>
   <div id="actbox"></div>
-  <nav class="tabs">${tabs.map(([v, l]) => `<button class="tab ${S.detailTab === v ? "on" : ""}" data-dtab="${v}">${esc(l)}</button>`).join("")}</nav>
-  <div class="dbody">${body}</div>`;
+  <nav class="tabs" role="tablist" aria-label="Task detail tabs">${tabs.map(([v, l]) => `<button type="button" role="tab" aria-selected="${S.detailTab === v}" class="tab ${S.detailTab === v ? "on" : ""}" data-dtab="${v}">${esc(l)}</button>`).join("")}</nav>
+  <div class="dbody" role="tabpanel">${body}</div>`;
 }
 
 // ---------- other views ----------
 function configView() {
   const c = S.cfgData;
-  if (!c) return `<div class="card"><h3>Configuration</h3><p class="hint">Loading providers, models, prompts…</p></div>`;
+  if (!c) return `<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><div class="skel" style="height:12px;width:75%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;
   const provs = c.providers?.providers || [];
   const agents = c.agents?.agents || [];
   return `<div class="card"><h3>Configuration <span class="hint">providers · models · default prompts</span></h3>
@@ -342,7 +345,7 @@ function outboxView() {
 }
 function retroView() {
   const r = S.retro;
-  if (!r) return `<div class="card"><h3>Retro</h3><p class="hint">Loading…</p></div>`;
+  if (!r) return `<div class="card" aria-busy="true"><h3>Retro</h3><div class="skel" style="height:18px;width:50%"></div><div class="skel" style="height:12px;width:85%"></div><p class="hint">Loading retrospective…</p></div>`;
   return `<div class="card"><h3>Retro <span class="hint">last ${esc(String(r.since || "").slice(0, 10))} → now</span></h3>
   <div class="agrid">
   <div class="card"><h3>Runs</h3><div class="arow"><span>Total</span><b>${r.runs?.c ?? 0}</b></div><div class="arow"><span>Avg duration</span><b>${Math.round(r.runs?.avgSec || 0)}s</b></div></div>
@@ -411,13 +414,14 @@ function todosView() {
     (!S.todoQ || (t.text || "").toLowerCase().includes(S.todoQ.toLowerCase())) &&
     (S.todoSource === "all" || (t.project || "").includes(S.todoSource) || S.todoSource === "manual"));
   return `<div class="card"><h3>TODOs</h3>
-  <div class="row">${tabs.map(([v, l]) => `<button class="tab ${S.todoTab === v ? "on" : ""}" data-ttab="${v}">${l}</button>`).join("")}<span class="spacer"></span><button class="btn sm primary" id="todo-new">+ New TODO</button></div>
-  <div class="row"><div class="chatbox" style="flex:1"><input id="todo-q" placeholder="Search TODOs" value="${esc(S.todoQ)}"></div>
-  <select id="todo-src" class="sel"><option value="all">All sources</option><option value="flow:" ${S.todoSource === "flow:" ? "selected" : ""}>Flows</option><option value="manual" ${S.todoSource === "manual" ? "selected" : ""}>Manual</option></select>
-  <select id="todo-sort" class="sel"><option>Newest first</option></select></div>
+  <div class="row" role="tablist" aria-label="TODO status">${tabs.map(([v, l]) => `<button type="button" role="tab" aria-selected="${S.todoTab === v}" class="tab ${S.todoTab === v ? "on" : ""}" data-ttab="${v}">${l}</button>`).join("")}<span class="spacer"></span><button type="button" class="btn sm primary" id="todo-new">+ New TODO</button></div>
+  ${S.todoForm ? `<div class="appr" role="dialog" aria-label="New TODO"><label class="fld"><span>TODO text</span><input id="todo-title" placeholder="What needs to be done?"></label><div class="row"><button type="button" class="btn sm primary" id="todocreate">Add TODO</button><button type="button" class="btn sm ghost" id="todocancel">Cancel</button></div></div>` : ""}
+  <div class="row"><div class="chatbox" style="flex:1"><label class="sr" for="todo-q">Search TODOs</label><input id="todo-q" type="search" placeholder="Search TODOs" value="${esc(S.todoQ)}"></div>
+  <label class="sr" for="todo-src">Filter by source</label><select id="todo-src" class="sel"><option value="all">All sources</option><option value="flow:" ${S.todoSource === "flow:" ? "selected" : ""}>Flows</option><option value="manual" ${S.todoSource === "manual" ? "selected" : ""}>Manual</option></select>
+  <label class="sr" for="todo-sort">Sort order</label><select id="todo-sort" class="sel"><option>Newest first</option></select></div>
   ${list.slice(0, 30).map((t) => `<div class="appr"><div class="row"><span class="tag">${esc(t.priority)}</span><span>${esc(t.text)}</span><span class="spacer"></span><span class="hint">${esc(t.id)} · ${esc(String(t.created_at || "").slice(0, 10))}</span></div>
-  <div class="row">${t.status === "open" ? `<button class="btn sm ghost" data-tdone="${esc(t.id)}">✓ Done</button><button class="btn sm ghost" data-tdis="${esc(t.id)}">Dismiss</button><button class="btn sm" data-tconv="${esc(t.id)}">→ Convert to request</button>` : `<span class="tag ${t.status === "done" ? "ok" : ""}">${esc(t.status)}</span>`}</div></div>`).join("") || `<div class="empty">No TODOs yet — they appear here when created manually or discovered by inbox sweepers.</div>`}
-  <div class="chatbox"><input id="todo-in" placeholder="+ new todo…"><button class="btn sm" id="todo-add">Add</button></div></div>`;
+  <div class="row">${t.status === "open" ? `<button type="button" class="btn sm ghost" data-tdone="${esc(t.id)}">Done</button><button type="button" class="btn sm ghost" data-tdis="${esc(t.id)}">Dismiss</button><button type="button" class="btn sm" data-tconv="${esc(t.id)}">Convert to request</button>` : `<span class="tag ${t.status === "done" ? "ok" : ""}">${esc(t.status)}</span>`}</div></div>`).join("") || `<div class="empty" role="status">No TODOs yet — they appear here when created manually or discovered by inbox sweepers.</div>`}
+  <div class="chatbox"><label class="sr" for="todo-in">Quick add TODO</label><input id="todo-in" placeholder="+ new todo…"><button type="button" class="btn sm" id="todo-add">Add</button></div></div>`;
 }
 function logsView() {
   return `<div class="card"><div class="tbar"><select id="loglevel"><option value="">All levels</option>
@@ -443,9 +447,21 @@ function reqModal() {
   <div class="row"><button class="btn primary" id="req-go" ${S.reqBusy ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : "Enqueue Task"}</button></div></div></div>`;
 }
 
-// ---------- render ----------
+// ---------- render (focus-preserving: skip re-render while typing or modal open) ----------
+function setStatus(msg) {
+  S.statusMsg = msg;
+  const el = $("#status");
+  if (el) el.textContent = msg;
+}
 function render() {
   document.body.dataset.theme = S.theme;
+  const active = document.activeElement;
+  const activeId = active?.id || null;
+  const activeKey = active?.dataset ? JSON.stringify({ v: active.dataset.view, b: active.dataset.btab, d: active.dataset.dtab, s: active.dataset.sel, c: active.dataset.cmd }) : null;
+  const typing = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
+  const modalOpen = S.showReq || S.cmdOpen || S.flowEdit || S.diagFull;
+  if (typing || (modalOpen && S._renderedModal)) { wireOnly(); return; }
+  S._renderedModal = modalOpen;
   const v = S.view;
   const main = v === "board" ? boardView() : v === "assistant" ? `<div class="card"><h3>Assistant</h3><div class="chatbox"><input id="chat-in" placeholder='Ask Rick…'><button class="btn primary sm" id="chat-send">Send</button></div><div class="feed">${(S.feed?.messages || []).slice(-10).map((m) => `<div class="fmsg ${m.kind === "chat" ? "user" : "rick"}">${esc(m.text)}</div>`).join("")}</div></div>` :
     v === "brain" ? brainView() : v === "todos" ? todosView() : v === "automations" ? flowsView() :
@@ -455,8 +471,15 @@ function render() {
     v === "retro" ? retroView() :
     v === "logs" ? logsView() : v === "tools" ? toolsView() : v === "agents" ? agentsView() :
     `<div class="card"><h3>${esc(v)}</h3><p class="hint">Coming soon.</p></div>`;
-  $("#app").innerHTML = `<div class="app">${sidebar()}<main class="main">${topbar()}${main}</main></div>${reqModal()}${cmdPalette()}`;
-  $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; render(); }));
+  $("#app").innerHTML = `<a class="skip" href="#main">Skip to main content</a><div class="app">${sidebar()}<main id="main" class="main" tabindex="-1">${topbar()}${main}</main></div>${reqModal()}${cmdPalette()}<div id="status" class="sr" role="status" aria-live="polite">${esc(S.statusMsg || "")}</div>`;
+  // restore focus after re-render
+  if (activeId) { const back = document.getElementById(activeId); if (back) back.focus({ preventScroll: true }); }
+  wireOnly();
+}
+function wireOnly() {
+  const menu = $("#menu");
+  if (menu) menu.onclick = () => { const side = $(".side"); const open = side?.classList.toggle("open"); menu.setAttribute("aria-expanded", open ? "true" : "false"); };
+  $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; $(".side")?.classList.remove("open"); render(); }));
   $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; render(); }));
   $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; render(); }));
   $$("[data-dtab]").forEach((b) => (b.onclick = () => { S.detailTab = b.dataset.dtab; render(); }));
@@ -466,7 +489,9 @@ function render() {
   // loop task tables wiring
   $$("[data-loop]").forEach((b) => (b.onclick = async () => { S.loopSel = b.dataset.loop; S.loopDetail = null; render(); loadLoopDetail(S.loopSel); }));
   const lx = $("#loopx"); if (lx) lx.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
-  const ln = $("#loopnew"); if (ln) ln.onclick = async () => { const t = prompt("Loop task title:"); if (!t) return; const r = await api("/api/control/loop-tasks", { method: "POST", body: JSON.stringify({ title: t, repo: "tab-automation", task_type: "assistant", status: "open" }) }); S.loopSel = r.id; tick(true); };
+  const ln = $("#loopnew"); if (ln) ln.onclick = () => { S.loopForm = { title: "" }; render(); const inp = $("#loop-title"); if (inp) inp.focus(); };
+  const lc = $("#loopcancel"); if (lc) lc.onclick = () => { S.loopForm = null; render(); };
+  const ls = $("#loopcreate"); if (ls) ls.onclick = async () => { const inp = $("#loop-title"); const t = inp ? inp.value.trim() : ""; if (!t) { setStatus("Loop task needs a title."); return; } const r = await api("/api/control/loop-tasks", { method: "POST", body: JSON.stringify({ title: t, repo: "tab-automation", task_type: "assistant", status: "open" }) }); S.loopForm = null; S.loopSel = r.id; tick(true); };
   $$("[data-loopx]").forEach((b) => (b.onclick = () => { const k = "L" + b.dataset.loopx; S.expandedSteps.has(k) ? S.expandedSteps.delete(k) : S.expandedSteps.add(k); render(); }));
   $$("[data-looprun]").forEach((b) => (b.onclick = async () => {
     const i = +b.dataset.looprun; const d = S.loopDetail; if (!d) return;
@@ -475,9 +500,8 @@ function render() {
     b.disabled = true; b.textContent = "⏳ Dispatching…";
     try {
       const r = await api(`/api/control/loop-tasks/${d.task.id}/dispatch`, { method: "POST", body: JSON.stringify({ agent: ag ? ag.value : s.agent, model: mo ? mo.value : (s.model || ""), prompt: pr ? pr.value : (s.prompt || ""), stepId: s.step_id }) });
-      S.cfgMsg = ""; S.loopDetail = null; tick(true);
-      alert(`Dispatched ${ag ? ag.value : s.agent} — output: ${String(r.output || "").slice(0, 300)}`);
-    } catch (e) { b.disabled = false; b.textContent = `▶ Dispatch`; alert(e.message); }
+      S.cfgMsg = ""; S.loopDetail = null; setStatus(`Dispatched ${ag ? ag.value : s.agent} — done.`); tick(true);
+    } catch (e) { b.disabled = false; b.textContent = `Dispatch`; setStatus(`Dispatch failed: ${e.message}`); }
   }));
   const la = $("#loopadd"); if (la) la.onclick = () => { if (!S.loopDetail) return; S.loopDetail.steps = [...(S.loopDetail.steps || []), { step_id: `step-${(S.loopDetail.steps || []).length + 1}`, type: "agent", agent: "assistant", model: "", status: "pending", prompt: "", output: "" }]; render(); };
   const lsv = $("#loopsave"); if (lsv) lsv.onclick = async () => { if (!S.loopDetail) return; const steps = (S.loopDetail.steps || []).map((s, i) => { const ag = $(`#loop-agent-${i}`); const mo = $(`#loop-model-${i}`); const pr = $(`#loop-prompt-${i}`); return { ...s, agent: ag ? ag.value : s.agent, model: mo ? mo.value : s.model, prompt: pr ? pr.value : s.prompt }; }); await api(`/api/control/loop-tasks/${S.loopDetail.task.id}`, { method: "POST", body: JSON.stringify({ steps }) }); S.loopDetail = null; tick(true); };
@@ -505,7 +529,7 @@ function render() {
     try {
       await api(`/api/control/task/${S.sel}/requeue`, { method: "POST", body: JSON.stringify({ stepIndex: i, guidance }) });
       S.detail = null; tick(true);
-    } catch (e) { b.disabled = false; b.textContent = `🔄 Re-queue from step ${i + 1}`; alert(e.message); }
+    } catch (e) { b.disabled = false; b.textContent = `Re-queue from step ${i + 1}`; setStatus(`Re-queue failed: ${e.message}`); }
   }));
   $$("[data-act]").forEach((b) => (b.onclick = async () => {
     const a = b.dataset.act; const box = $("#actbox");
@@ -523,7 +547,8 @@ function render() {
     if (a === "requeue") { S.detailTab = "steps"; render(); return; }
     const map = { del: "delete" };
     if (map[a]) {
-      if (a === "del" && !confirm("Delete this task and its worktree?")) return;
+      if (a === "del" && !S.confirmDel) { S.confirmDel = true; render(); setStatus("Press Delete again to confirm."); setTimeout(() => { S.confirmDel = false; }, 4000); return; }
+      S.confirmDel = false;
       await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: map[a] }) });
       if (a === "del") { S.sel = null; S.detail = null; }
       else S.detail = null;
@@ -535,6 +560,7 @@ function render() {
   const ss = $("#sesssel"); if (ss) ss.onchange = () => { S.sessIdx = Number(ss.value); render(); };
   const sb = $("#sortby"); if (sb) sb.onchange = () => { S.sortBy = sb.value; render(); };
   const fq = $("#fq"); if (fq) { fq.oninput = () => { S.q = fq.value; if (S.cmdOpen) render(); }; fq.onchange = () => render(); }
+  $$("[data-clearf]").forEach((b) => (b.onclick = () => { S.q = ""; S.statusFilter = ""; render(); }));
   const nt = $("#newtask"); if (nt) nt.onclick = () => { S.showReq = true; render(); wireReq(); };
   const cmds = $("#cmds"); if (cmds) cmds.onclick = () => { S.cmdOpen = true; S.cmdIdx = 0; render(); };
   const cx = $("#cmdx"); if (cx) cx.onclick = () => { S.cmdOpen = false; render(); };
@@ -604,7 +630,9 @@ function render() {
   $$("[data-ttab]").forEach((b) => (b.onclick = () => { S.todoTab = b.dataset.ttab; render(); }));
   const tq = $("#todo-q"); if (tq) { tq.oninput = () => { S.todoQ = tq.value; }; tq.onchange = () => render(); }
   const ts2 = $("#todo-src"); if (ts2) ts2.onchange = () => { S.todoSource = ts2.value; render(); };
-  const tn = $("#todo-new"); if (tn) tn.onclick = () => { const t = prompt("New TODO:"); if (t) api("/api/control/todos", { method: "POST", body: JSON.stringify({ text: t }) }).then(() => tick(true)); };
+  const tn = $("#todo-new"); if (tn) tn.onclick = () => { S.todoForm = true; render(); const inp = $("#todo-title"); if (inp) inp.focus(); };
+  const tc = $("#todocancel"); if (tc) tc.onclick = () => { S.todoForm = false; render(); };
+  const ts = $("#todocreate"); if (ts) ts.onclick = async () => { const inp = $("#todo-title"); const t = inp ? inp.value.trim() : ""; if (!t) { setStatus("TODO needs text."); return; } S.todoForm = false; await api("/api/control/todos", { method: "POST", body: JSON.stringify({ text: t }) }); tick(true); };
   $$("[data-tdone]").forEach((b) => (b.onclick = async () => { await api("/api/control/todos/done", { method: "POST", body: JSON.stringify({ id: b.dataset.tdone }) }); tick(true); }));
   $$("[data-tdis]").forEach((b) => (b.onclick = async () => { await api("/api/control/todos/dismiss", { method: "POST", body: JSON.stringify({ id: b.dataset.tdis }) }); tick(true); }));
   $$("[data-tconv]").forEach((b) => (b.onclick = async () => { const r = await api("/api/control/todos/convert", { method: "POST", body: JSON.stringify({ id: b.dataset.tconv }) }); S.view = "requests"; tick(true); }));
@@ -694,12 +722,25 @@ async function tick(force) {
     if (S.loopSel && !S.loopDetail) { loadLoopDetail(S.loopSel); return; }
     render(); arm();
   } catch (e) {
-    $("#app").innerHTML = `<main class="shell"><div class="status bad">Control Room load nahi hua: ${esc(e.message)}</div></main>`;
+    $("#app").innerHTML = `<main class="shell"><div class="status bad" role="alert">Control Room failed to load: ${esc(e.message)}. <button type="button" class="btn sm" onclick="location.reload()">Retry</button></div></main>`;
   }
 }
 document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); S.cmdOpen = !S.cmdOpen; render(); }
-  else if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") { e.preventDefault(); $("#fq")?.focus(); }
-  else if (e.key === "Escape" && S.cmdOpen) { S.cmdOpen = false; render(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); S.cmdOpen = !S.cmdOpen; S.cmdIdx = 0; render(); const f = $("#fq"); if (S.cmdOpen && f) f.focus(); }
+  else if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA" && document.activeElement?.tagName !== "SELECT") { e.preventDefault(); $("#fq")?.focus(); }
+  else if (e.key === "Escape") {
+    if (S.cmdOpen) { S.cmdOpen = false; render(); }
+    else if (S.showReq) { S.showReq = false; render(); }
+    else if (S.flowEdit) { S.flowEdit = null; render(); }
+    else if (S.diagFull) { S.diagFull = false; render(); }
+  } else if (S.cmdOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    e.preventDefault();
+    const n = $$("[data-cmd]").length || 1;
+    S.cmdIdx = e.key === "ArrowDown" ? (S.cmdIdx + 1) % n : (S.cmdIdx - 1 + n) % n;
+    render();
+  } else if (S.cmdOpen && e.key === "Enter") {
+    const el = $$("[data-cmd]")[S.cmdIdx];
+    if (el) el.click();
+  }
 });
 tick();
