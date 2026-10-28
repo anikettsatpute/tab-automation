@@ -126,6 +126,20 @@ export function loadConfig() {
       if (!agents.has(a)) errors.push(`Pipeline ${p.id}: unknown agent '${a}'`);
     }
   }
+  // task types: repeatable pipeline templates (vs automations which are self-contained).
+  // Every task type needs a stream + agents that exist; each launch takes a fresh goal.
+  const taskTypes = streamsDoc.taskTypes ?? [];
+  const typeIds = new Set();
+  for (const t of taskTypes) {
+    if (!t.id) errors.push("A task type is missing id");
+    else if (typeIds.has(t.id)) errors.push(`Duplicate task type id: ${t.id}`);
+    else typeIds.add(t.id);
+    if (t.stream && !streamIds.has(t.stream)) errors.push(`Task type ${t.id}: unknown stream '${t.stream}'`);
+    if (!(t.agents ?? []).length) errors.push(`Task type ${t.id}: needs at least one agent`);
+    for (const a of t.agents ?? []) {
+      if (!agents.has(a)) errors.push(`Task type ${t.id}: unknown agent '${a}'`);
+    }
+  }
 
   return { cfg, errors };
 }

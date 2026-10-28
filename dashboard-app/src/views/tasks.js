@@ -3,10 +3,22 @@
 import { S, esc, ago, statusBadge } from "./state.js";
 import { attentionBanners } from "./shell.js";
 
+export function taskTypesSection() {
+  const types = S.taskTypes || [];
+  if (!types.length) return "";
+  return `<div class="card"><h3>Task types <span class="hint">repeatable pipelines — launch per goal (vs self-contained automations)</span></h3>
+  ${types.map((t) => `<div class="appr"><div class="row"><b>${esc(t.name || t.id)}</b><span class="kbd">${esc(t.stream || "")}</span><span class="spacer"></span><span class="hint">${esc(t.description || "")}</span></div>
+  <p class="hint">pipeline: ${(t.agents || []).map(esc).join(" → ")}</p>
+  <div class="row"><label class="fld" style="flex:1"><span>${esc(t.inputLabel || "Goal")}</span><input id="task-goal-${esc(t.id)}" placeholder="${esc(t.inputLabel || "Describe the goal…")}"></label>
+  <button type="button" class="btn sm primary" data-tasklaunch="${esc(t.id)}">Launch ${esc(t.name || t.id)}</button></div>
+  <div id="task-out-${esc(t.id)}"></div></div>`).join("")}</div>`;
+}
+
 export function tasksView(list, detailPane) {
   const sel = S.detail;
   return `
   ${attentionBanners()}
+  ${taskTypesSection()}
   <div class="bhead"><h2>Tasks <span class="hint">${list.length} runs</span></h2>
     <span class="spacer"></span>
     <label class="sr" for="sortby">Sort tasks</label>

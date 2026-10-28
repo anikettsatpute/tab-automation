@@ -785,11 +785,12 @@ app.post("/api/workflows", async (c) => {
   return c.json({ saved: true, count: (workflows ?? []).length });
 });
 
-// ---- API: streams + task pipelines (reference: Streams step — repo replacement) ----
+// ---- API: streams + task pipelines + task types (reference: Streams step — repo replacement) ----
 // Streams group agents (general, finance...). Pipelines are user-configured
-// agent->agent chains per stream. The divider + request intake read these.
+// agent->agent chains per stream. Task types are repeatable pipeline templates
+// (one launch = one goal) vs self-contained automations. The divider + request intake read these.
 app.post("/api/streams", async (c) => {
-  const { streams, pipelines } = await c.req.json().catch(() => ({}));
+  const { streams, pipelines, taskTypes } = await c.req.json().catch(() => ({}));
   const agentsDoc = loadJson("config/agents.json", { agents: [] });
   const agentIds = new Set((agentsDoc.agents ?? []).map((a) => a.id));
   for (const s of streams ?? []) {
@@ -806,8 +807,19 @@ app.post("/api/streams", async (c) => {
       if (!agentIds.has(a)) return c.json({ error: `pipeline ${p.id}: unknown agent '${a}'` }, 400);
     }
   }
-  saveJson("config/streams.json", { streams: streams ?? [], pipelines: pipelines ?? [] });
-  return c.json({ saved: true, streams: (streams ?? []).length, pipelines: (pipelines ?? []).length });
+  // Preserve existing taskTypes when the wizard doesn't send them (old clients).
+  const prev = loadJson("config/streams.json", { taskTypes: [] });
+  const nextTypes = taskTypes === undefined ? (prev.taskTypes ?? []) : (taskTypes ?? []);
+  for (const t of nextTypes) {
+    if (!t.id) return c.json({ error: "task type missing id" }, 400);
+    if (t.stream && !streamIds.has(t.stream)) return c.json({ error: `task type ${t.id}: unknown stream '${t.stream}'` }, 400);
+    if (!(t.agents ?? []).length) return c.json({ error: `task type ${t.id}: needs at least one agent` }, 400);
+    for (const a of t.agents ?? []) {
+      if (!agentIds.has(a)) return c.json({ error: `task type ${t.id}: unknown agent '${a}'` }, 400);
+    }
+  }
+  saveJson("config/streams.json", { streams: streams ?? [], pipelines: pipelines ?? [], taskTypes: nextTypes });
+  return c.json({ saved: true, streams: (streams ?? []).length, pipelines: (pipelines ?? []).length, taskTypes: nextTypes.length });
 });
 
 // ---- API: validate ----

@@ -72,6 +72,14 @@
       "temperature": 0.6,
       "maxTokens": 1200,
       "defaultPrompt": "Turn this into a punchy Discord post: headline, 3-5 bullets, one CTA. Under 1200 chars."
+    },
+    {
+      "id": "tester",
+      "description": "Test engineer. Writes test plans, runs checks, reports pass/fail with evidence.",
+      "systemPrompt": "You are Tester, a test engineer. Given code/a scope and a goal, output exactly: 1) Test plan (numbered cases with expected results), 2) Results (PASS/FAIL per case with evidence), 3) Verdict: PASS or FAIL + one-line reason. Be concrete — no vague 'looks good'. Keep under 2000 chars.",
+      "temperature": 0.3,
+      "maxTokens": 2000,
+      "defaultPrompt": "Test this per the goal. Output: test plan, PASS/FAIL results with evidence, verdict."
     }
   ]
 }

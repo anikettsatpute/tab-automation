@@ -17,6 +17,7 @@ export const S = {
   flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "", flowRule: "",
   flowMsg: "", cfgData: null, cfgMsg: "",
   loopTasks: [], loopSel: null, loopDetail: null, loopForm: null, todoForm: false,
+  taskTypes: [],
   cmdOpen: false, cmdIdx: 0, theme: "dark",
   groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all",
   showCtx: false, sessIdx: 0, diagFull: false, reqChanges: "", appendTitle: "",
@@ -25,7 +26,8 @@ export const S = {
 
 // Agent pipeline: OUR agents from config/agents.json are the pipeline.
 // Streams group agents; pipelines chain agent->agent. Divider picks stream+pipeline.
-export const AGENT_OPTS = ["assistant", "summarizer", "coder", "finance-india", "finance-us"];
+// NOTE: keep in sync with config/agents.json ids (scout/analyst/critic/writer/tester added).
+export const AGENT_OPTS = ["assistant", "summarizer", "coder", "finance-india", "finance-us", "scout", "analyst", "critic", "writer", "tester"];
 export const streamName = (id) => (S.cfgData?.streams?.streams || []).find((s) => s.id === id)?.name || id;
 export const streamPipes = (sid) => (S.cfgData?.streams?.pipelines || []).filter((p) => !sid || p.stream === sid);
 

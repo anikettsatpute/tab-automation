@@ -79,17 +79,26 @@ export async function classifyTask(cfg, text) {
   }
 }
 
-/** Generic-prompt router: plain-English task types map to real automations.
- *  "research X" -> deep-research, "review this" -> ship-it, "brief me" -> finance.
- *  Returns a workflow id or null. No LLM — deterministic keyword match. */
+/** Generic-prompt router: plain-English task types map to real automations
+ *  AND repeatable task types (tasks ≠ automations).
+ *  "research X" -> deep-research, "review this" -> ship-it, "brief me" -> finance,
+ *  "spike X" / "tech spike" -> task type tech-spike, "bug ..." -> bug-fix,
+ *  "regression ..." -> regression-check, "feature ..." -> feature-build.
+ *  Returns {kind:'workflow',id} | {kind:'taskType',id} | null. No LLM — deterministic. */
 export function routeGenericPrompt(cfg, text) {
   const t = String(text || "").toLowerCase();
   const has = (...ws) => ws.some((w) => t.includes(w));
-  if (has("deep research", "research this", "research the", "investigate this", "look into")) return "deep-research";
-  if (has("ship it", "ship this", "review this", "red team", "red-team", "code review")) return "ship-it";
-  if (has("scout this", "scout the", "find out about", "dig into")) return "scout-test";
+  // Repeatable task types first: explicit per-goal pipelines (tasks, not automations).
+  if (has("tech spike", "spike this", "spike the", "open question", "should we adopt", "evaluate whether", "compare options", "trade-off", "tradeoff")) return { kind: "taskType", id: "tech-spike" };
+  if (has("bug:", "bug report", "it crashes", "stack trace", "repro steps", "steps to repro", "expected vs actual", "fix this bug")) return { kind: "taskType", id: "bug-fix" };
+  if (has("regression", "regression test", "verify no break", "smoke test the release")) return { kind: "taskType", id: "regression-check" };
+  if (has("feature request", "build me a", "add support for", "acceptance criteria")) return { kind: "taskType", id: "feature-build" };
+  // Self-contained automations (trigger + steps baked in).
+  if (has("deep research", "research this", "research the", "investigate this", "look into")) return { kind: "workflow", id: "deep-research" };
+  if (has("ship it", "ship this", "review this", "red team", "red-team", "code review")) return { kind: "workflow", id: "ship-it" };
+  if (has("scout this", "scout the", "find out about", "dig into")) return { kind: "workflow", id: "scout-test" };
   if (has("brief me", "morning brief", "market brief", "premarket", "pre-market")) {
-    return has("us", "nasdaq", "nyse", "s&p") ? "premarket-us" : "premarket-india";
+    return { kind: "workflow", id: has("us", "nasdaq", "nyse", "s&p") ? "premarket-us" : "premarket-india" };
   }
   if (has("summarize this", "tl;dr", "tldr this")) return null; // single-agent fast path handles it
   return null;
@@ -151,10 +160,66 @@ export async function handleRickMessage(cfg, deps, msg, text) {
 
   // 0b) "run it" / explicit workflow mention -> run the REAL workflow, never a hallucinated pipeline
   const targetId = resolveRunTarget(cfg, text, channelHistory);
-  // 0b2) generic task-type prompts ("research X", "review this", "brief me") -> route to flows
-  const genericId = routeGenericPrompt(cfg, text);
-  if (genericId && !targetId) {
-    const wf = (cfg.workflows ?? []).find((w) => w.id === genericId);
+  // 0b2) generic prompts -> route to flows (automations) OR task types (repeatable pipelines).
+  // Tasks ≠ automations: a task type launch creates a task row + per-goal run;
+  // an automation run is self-contained. Both show live progress in the dashboard.
+  const generic = routeGenericPrompt(cfg, text);
+  if (generic?.kind === "taskType" && !targetId) {
+    const { createTask, saveTaskSteps, getRun, updateTask } = await import("./db.js");
+    const { runWorkflow } = await import("./workflow.js");
+    const { loadJson } = await import("./setup-api.js");
+    const doc = loadJson("config/streams.json", { taskTypes: [] });
+    const type = (doc.taskTypes || []).find((t) => t.id === generic.id);
+    if (type) {
+      saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
+      await msg.channel.sendTyping().catch(() => {});
+      await msg.reply(`🧩 Got it — launching **${type.name}** task (repeatable pipeline: ${(type.agents || []).join(" → ")})… watch the dashboard Tasks tab move.`);
+      const taskId = createTask(cfg.root, {
+        title: `${type.name}: ${text.slice(0, 80)}`, repo: type.stream || "general",
+        task_type: type.id, status: "open", end_goal: text.slice(0, 4000),
+      });
+      const steps = (type.agents || []).map((agent, i) => ({
+        id: `stage-${i + 1}-${agent}`, type: "agent", agent,
+        prompt: `Task ${taskId} (${type.id}) step ${i + 1}/${type.agents.length} as '${agent}'.\nGoal: ${text.slice(0, 1500)}\nDo the ${agent} work now, concretely.`,
+      }));
+      saveTaskSteps(cfg.root, taskId, steps.map((s, i) => ({ step_id: s.id, type: s.type, agent: s.agent, model: "", status: "pending", prompt: s.prompt, output: "", position: i })));
+      const wf = { id: `task-${taskId}`, name: `${type.name} ${taskId}`, trigger: { type: "manual" }, steps };
+      const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+      let runId = null, runStatus = "done", runErr = "";
+      try {
+        const ctx = await deps.runWorkflow(wf, { kind: "discord-task", text, user: msg.author.tag, channelId: msg.channelId, taskId, taskType: type.id }, msg.channelId, replyTo);
+        runId = ctx._runId || null;
+      } catch (e) { runStatus = "failed"; runErr = String(e.message || e).slice(0, 300); }
+      if (!runId) {
+        try {
+          const { listRuns } = await import("./db.js");
+          runId = (listRuns(cfg.root, { workflowId: `task-${taskId}`, limit: 1 })[0] || {}).id || null;
+        } catch {}
+      }
+      try {
+        if (runId) {
+          const full = getRun(cfg.root, runId);
+          if (full) {
+            runStatus = full.status || runStatus; runErr = full.error || runErr;
+            const synced = steps.map((s, i) => {
+              const rs = (full.steps || []).find((x) => x.step_id === s.id) || (full.steps || [])[i];
+              const st = !rs ? "pending" : rs.status === "ok" ? "done" : rs.status === "failed" ? "failed" : "pending";
+              let out = "";
+              if (rs) { try { const oj = rs.output_json ? JSON.parse(rs.output_json) : null; out = String(oj?.output || oj?.summary || rs.raw_text || "").slice(0, 8000); } catch { out = String(rs.raw_text || "").slice(0, 8000); } }
+              return { step_id: s.id, type: s.type, agent: s.agent, model: "", status: st, prompt: s.prompt, output: out, position: i };
+            });
+            saveTaskSteps(cfg.root, taskId, synced);
+            const doneCount = synced.filter((s) => s.status === "done").length;
+            updateTask(cfg.root, taskId, { status: runStatus === "done" ? "done" : "failed", progress: Math.round((doneCount / Math.max(1, synced.length)) * 100), blocked_reason: runStatus === "done" ? "" : runErr.slice(0, 500) });
+          }
+        }
+      } catch {}
+      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Launched task ${taskId} [${type.id}] -> run ${runId || "?"} (${runStatus})`.slice(0, 500), channelId: msg.channelId });
+      return { kind: "task", taskType: type.id, taskId, runId, status: runStatus };
+    }
+  }
+  if (generic?.kind === "workflow" && !targetId) {
+    const wf = (cfg.workflows ?? []).find((w) => w.id === generic.id);
     if (wf) {
       saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
       await msg.channel.sendTyping().catch(() => {});

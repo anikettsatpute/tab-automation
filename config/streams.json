@@ -118,5 +118,58 @@
         "assistant"
       ]
     }
+  ],
+  "taskTypes": [
+    {
+      "id": "bug-fix",
+      "name": "Bug fix",
+      "description": "Repro, fix, test, verify — repeatable per bug report.",
+      "stream": "general",
+      "agents": [
+        "coder",
+        "tester",
+        "critic",
+        "assistant"
+      ],
+      "inputLabel": "Bug report (what breaks, steps to repro, expected vs actual)"
+    },
+    {
+      "id": "feature-build",
+      "name": "Feature build",
+      "description": "Scope, implement, test, summarize — repeatable per feature request.",
+      "stream": "general",
+      "agents": [
+        "assistant",
+        "coder",
+        "tester",
+        "writer"
+      ],
+      "inputLabel": "Feature request (what to build, acceptance criteria)"
+    },
+    {
+      "id": "regression-check",
+      "name": "Regression check",
+      "description": "Tester sweeps a scope, critic gates, assistant reports — repeatable per release.",
+      "stream": "general",
+      "agents": [
+        "tester",
+        "critic",
+        "assistant"
+      ],
+      "inputLabel": "Scope to regression-test (area, release, risk notes)"
+    },
+    {
+      "id": "tech-spike",
+      "name": "Tech spike",
+      "description": "Scout researches, analyst verdicts, tester writes acceptance tests, writer publishes — repeatable per open question. Fully testable: needs no repo, only web research.",
+      "stream": "research",
+      "agents": [
+        "scout",
+        "analyst",
+        "tester",
+        "writer"
+      ],
+      "inputLabel": "Open question to spike (what to research, decision needed, constraints)"
+    }
   ]
 }

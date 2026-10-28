@@ -63,6 +63,7 @@ function step(dir) {
     S.workflows = s.workflows.workflows || [];
     S.streams = s.streams?.streams || [];
     S.pipelines = s.streams?.pipelines || [];
+    S.taskTypes = s.streams?.taskTypes || [];
     render();
   } catch (e) {
     $("#app").innerHTML = `<div class="shell"><div class="status bad" role="alert">Failed to load setup state: ${esc(e.message)}. Is the setup server running?</div></div>`;

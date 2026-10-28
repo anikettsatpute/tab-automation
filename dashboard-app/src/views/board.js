@@ -1,6 +1,6 @@
 // Board shell: tab switcher + delegates to task / automation-runs / loop views.
 // Pure render functions — state + events live in main.js.
-import { S, esc } from "./state.js";
+import { S, esc, AGENT_OPTS } from "./state.js";
 import { attentionBanners } from "./shell.js";
 import { tasksView, automationRunsView } from "./tasks.js";
 

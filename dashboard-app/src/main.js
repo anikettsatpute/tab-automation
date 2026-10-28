@@ -73,6 +73,19 @@ function wireOnly() {
   }));
   $$("[data-rerun]").forEach((b) => (b.onclick = async () => { await api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.rerun, text: "" }) }); tick(true); }));
   $$("[data-runflow]").forEach((b) => (b.onclick = async () => { await api("/api/control/automations/" + b.dataset.runflow + "/run", { method: "POST" }).catch(() => api("/api/control/chat", { method: "POST", body: JSON.stringify({ workflow: b.dataset.runflow, text: "" }) })); tick(true); }));
+  $$("[data-tasklaunch]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.tasklaunch; const inp = $(`#task-goal-${id}`); const out = $(`#task-out-${id}`);
+    const goal = inp ? inp.value.trim() : "";
+    if (!goal) { setStatus("Task needs a goal — describe the bug or feature."); if (inp) inp.focus(); return; }
+    b.disabled = true; b.textContent = "Launching…";
+    if (out) out.innerHTML = `<p class="hint">Launching ${esc(id)} — spawning sessions per agent…</p>`;
+    try {
+      const r = await api(`/api/control/task-types/${id}/launch`, { method: "POST", body: JSON.stringify({ goal }) });
+      if (out) out.innerHTML = `<div class="notice ok">Launched task <span class="kbd">${esc(r.taskId)}</span> → run <span class="kbd">${esc(r.runId || "?")}</span> (${(r.agents || []).join(" → ")}). Watch it move below.</div>`;
+      setStatus(`Task launched: ${r.taskId}`);
+      tick(true);
+    } catch (e) { b.disabled = false; b.textContent = `Launch`; if (out) out.innerHTML = `<div class="status bad" role="alert">${esc(e.message)}</div>`; }
+  }));
   $$("[data-xstep]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xstep; S.expandedSteps.has(i) ? S.expandedSteps.delete(i) : S.expandedSteps.add(i); render(); }));
   $$("[data-xvar]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xvar; S.expandedVariants.has(i) ? S.expandedVariants.delete(i) : S.expandedVariants.add(i); render(); }));
   $$("[data-ctx]").forEach((b) => (b.onclick = () => { S.showCtx = !S.showCtx; render(); }));
@@ -236,7 +249,7 @@ function arm() {
 
 async function tick(force) {
   try {
-    const [cfg, ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData] = await Promise.all([
+    const [cfg, ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData, taskTypes] = await Promise.all([
       api("/api/dashboard/config").catch(() => S.cfg),
       api("/api/control/overview?days=7").catch(() => null),
       api("/api/control/tasks?limit=30").catch(() => ({ tasks: [] })),
@@ -254,6 +267,7 @@ async function tick(force) {
       api("/api/control/retro?days=30").catch(() => null),
       api("/api/control/loop-tasks?limit=50").catch(() => ({ tasks: [] })),
       api("/api/control/config").catch(() => null),
+      api("/api/control/task-types").catch(() => ({ taskTypes: [] })),
     ]);
     if (cfg) S.cfg = cfg;
     if (ov) S.ov = ov;
@@ -264,6 +278,7 @@ async function tick(force) {
     S.requests = requests.requests || []; S.outbox = outbox.outbox || [];
     if (retro) S.retro = retro;
     S.loopTasks = loopTasks.tasks || [];
+    S.taskTypes = taskTypes.taskTypes || [];
     if (cfgData) S.cfgData = cfgData;
     if (S.sel && !S.detail) { loadDetail(S.sel); return; }
     if (S.loopSel && !S.loopDetail) { loadLoopDetail(S.loopSel); return; }

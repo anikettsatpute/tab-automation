@@ -15,7 +15,8 @@
 // Agent pipeline: every step dispatches one of OUR configured agents.
 // Streams (config/streams.json) group agents; pipelines chain agent->agent per stream.
 // The divider picks a stream + pipeline; the loop reconciles session JSON -> DB.
-export const AGENT_PIPELINE = ["assistant", "summarizer", "coder", "finance-india", "finance-us"];
+// NOTE: keep in sync with config/agents.json ids.
+export const AGENT_PIPELINE = ["assistant", "summarizer", "coder", "finance-india", "finance-us", "scout", "analyst", "critic", "writer", "tester"];
 
 /** Divider: pick a stream + agents from goal text. Streams come from config; heuristics map here. */
 export function divideGoal(goalText, streamsDoc = null) {

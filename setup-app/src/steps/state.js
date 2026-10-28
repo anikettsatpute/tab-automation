@@ -29,6 +29,7 @@ export const S = {
   workflows: [],
   streams: [],
   pipelines: [],
+  taskTypes: [],
   busy: false,
 };
 
