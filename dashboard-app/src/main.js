@@ -3,10 +3,12 @@
 import "./style.css";
 import { S, $, $$, esc, api, setStatus } from "./views/state.js";
 import { sidebar, topbar } from "./views/shell.js";
+import { refreshIcons, pageHead, emptyState } from "./views/ui.js";
 import { boardView, detailPane } from "./views/board.js";
-import { configView, agentsView, toolsView, brainView, requestsView, outboxView, retroView, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
+import { configView, agentsView, toolsView, brainView, requestsView, outboxView, retroView, paintRetroChart, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
 function render() {
   document.body.dataset.theme = S.theme;
+  const scrolls = [...document.querySelectorAll(".blist, .bdetail, .logbox")].map((el) => el.scrollTop);
   const active = document.activeElement;
   const activeId = active?.id || null;
   const activeKey = active?.dataset ? JSON.stringify({ v: active.dataset.view, b: active.dataset.btab, d: active.dataset.dtab, s: active.dataset.sel, c: active.dataset.cmd }) : null;
@@ -19,11 +21,14 @@ function render() {
     v === "brain" ? brainView() : v === "todos" ? todosView() : v === "automations" ? flowsView() :
     v === "requests" ? requestsView() : v === "outbox" ? outboxView() :
     v === "config" ? configView() :
-    v === "activity" ? `<div class="card"><h3>Activity <span class="hint">global audit stream</span></h3><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("")}</div></div>` :
+    v === "activity" ? `<div>${pageHead("Activity", "global audit stream")}<div class="card"><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("") || emptyState("activity", "No activity", "Runs and agent actions stream here.")}</div></div></div>` :
     v === "retro" ? retroView() :
     v === "logs" ? logsView() : v === "tools" ? toolsView() : v === "agents" ? agentsView() :
     `<div class="card"><h3>${esc(v)}</h3><p class="hint">Coming soon.</p></div>`;
   $("#app").innerHTML = `<a class="skip" href="#main">Skip to main content</a><div class="app">${sidebar()}<main id="main" class="main" tabindex="-1">${topbar()}${main}</main></div>${reqModal()}${cmdPalette()}<div id="status" class="sr" role="status" aria-live="polite">${esc(S.statusMsg || "")}</div>`;
+  [...document.querySelectorAll(".blist, .bdetail, .logbox")].forEach((el, i) => { if (scrolls[i] != null) el.scrollTop = scrolls[i]; });
+  refreshIcons();
+  if (S.view === "retro") paintRetroChart();
   // restore focus after re-render
   if (activeId) { const back = document.getElementById(activeId); if (back) back.focus({ preventScroll: true }); }
   wireOnly();
@@ -32,15 +37,18 @@ function render() {
 function wireOnly() {
   const menu = $("#menu");
   if (menu) menu.onclick = () => { const side = $(".side"); const open = side?.classList.toggle("open"); menu.setAttribute("aria-expanded", open ? "true" : "false"); };
-  $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; $(".side")?.classList.remove("open"); render(); }));
-  $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; render(); }));
-  $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; render(); }));
+  $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; S.fromTab = null; $(".side")?.classList.remove("open"); render(); }));
+  $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; S.sel = null; S.detail = null; render(); }));
+  $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; S.sel = null; S.detail = null; S.loopSel = null; S.loopDetail = null; render(); }));
+  $$("[data-types]").forEach((b) => (b.onclick = () => { S.showTypes = !S.showTypes; render(); }));
   $$("[data-dtab]").forEach((b) => (b.onclick = () => { S.detailTab = b.dataset.dtab; render(); }));
-  $$("[data-sel]").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; S.sessIdx = 0; render(); loadDetail(S.sel); }));
-  $$(".banner").forEach((b) => (b.onclick = async () => { S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; render(); loadDetail(S.sel); }));
-  const dc = $("#dclose"); if (dc) dc.onclick = () => { S.sel = null; S.detail = null; render(); };
+  $$("[data-sel]").forEach((b) => (b.onclick = async () => { S.fromTab = S.boardTab; S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; S.sessIdx = 0; render(); loadDetail(S.sel); }));
+  $$(".banner").forEach((b) => (b.onclick = async () => { S.fromTab = S.boardTab; S.sel = b.dataset.sel; S.detail = null; S.detailTab = "overview"; render(); loadDetail(S.sel); }));
+  const back = $("#dback"); if (back) back.onclick = () => { if (S.fromTab) S.boardTab = S.fromTab; S.fromTab = null; S.sel = null; S.detail = null; render(); };
+  const dc = $("#dclose"); if (dc) dc.onclick = () => { if (S.fromTab) S.boardTab = S.fromTab; S.fromTab = null; S.sel = null; S.detail = null; render(); };
   // loop task tables wiring
   $$("[data-loop]").forEach((b) => (b.onclick = async () => { S.loopSel = b.dataset.loop; S.loopDetail = null; render(); loadLoopDetail(S.loopSel); }));
+  const lb = $("#loopback"); if (lb) lb.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
   const lx = $("#loopx"); if (lx) lx.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
   const ln = $("#loopnew"); if (ln) ln.onclick = () => { S.loopForm = { title: "" }; render(); const inp = $("#loop-title"); if (inp) inp.focus(); };
   const lc = $("#loopcancel"); if (lc) lc.onclick = () => { S.loopForm = null; render(); };
@@ -62,7 +70,9 @@ function wireOnly() {
   $$("[data-cprov]").forEach((el) => (el.onchange = () => { if (S.cfgData?.providers?.providers?.[+el.dataset.cprov]) S.cfgData.providers.providers[+el.dataset.cprov][el.dataset.cf] = el.value; }));
   $$("[data-cagent]").forEach((el) => (el.onchange = () => { if (S.cfgData?.agents?.agents?.[+el.dataset.cagent]) S.cfgData.agents.agents[+el.dataset.cagent][el.dataset.cf] = el.value; }));
   const dp = $("#cfg-defprov"); if (dp) dp.onchange = () => { if (S.cfgData?.providers) S.cfgData.providers.defaultProvider = dp.value; };
-  const csv = $("#cfgsave"); if (csv) csv.onclick = async () => { if (!S.cfgData) return; await api("/api/control/config", { method: "POST", body: JSON.stringify({ providers: S.cfgData.providers, agents: S.cfgData.agents }) }); S.cfgMsg = "Configuration saved — dispatch uses it immediately."; render(); setTimeout(() => { S.cfgMsg = ""; render(); }, 3000); };
+  const csv = $("#cfgsave"); if (csv) csv.onclick = saveCfg;
+  const csv2 = $("#cfgsave2"); if (csv2) csv2.onclick = saveCfg;
+  async function saveCfg() { if (!S.cfgData) return; await api("/api/control/config", { method: "POST", body: JSON.stringify({ providers: S.cfgData.providers, agents: S.cfgData.agents }) }); S.cfgMsg = "Configuration saved — dispatch uses it immediately."; render(); setTimeout(() => { S.cfgMsg = ""; render(); }, 3000); }
   $$("[data-cfgtest]").forEach((b) => (b.onclick = async () => {
     const id = b.dataset.cfgtest; const mo = $(`#cfgtest-model-${id}`); const pr = $(`#cfgtest-prompt-${id}`); const out = $(`#cfgtest-out-${id}`);
     if (out) out.innerHTML = `<p class="hint">Dispatching ${esc(id)}…</p>`;
@@ -111,6 +121,19 @@ function wireOnly() {
       return;
     }
     if (a === "requeue") { S.detailTab = "steps"; render(); return; }
+    if (a === "done" || a === "block") {
+      const label = a === "done" ? "Mark done" : "Block";
+      if (box) box.innerHTML = `<div class="chatbox"><input id="ab-in" placeholder="${a === "done" ? "Resolution note (optional)…" : "Why is this blocked? (goes to outbox)…"}"><button type="button" class="btn sm primary" id="ab-go">${label}</button></div>`;
+      const go = $("#ab-go"); if (go) go.onclick = async () => {
+        const t = $("#ab-in").value.trim();
+        go.disabled = true; go.textContent = "Saving…";
+        try {
+          await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: a, text: t }) });
+          S.detail = null; tick(true);
+        } catch (e) { go.disabled = false; go.textContent = label; setStatus(`${label} failed: ${e.message}`); }
+      };
+      return;
+    }
     const map = { del: "delete" };
     if (map[a]) {
       if (a === "del" && !S.confirmDel) { S.confirmDel = true; render(); setStatus("Press Delete again to confirm."); setTimeout(() => { S.confirmDel = false; }, 4000); return; }
@@ -125,9 +148,12 @@ function wireOnly() {
   const dx = $("#diagx"); if (dx) dx.onclick = () => { S.diagFull = false; render(); };
   const ss = $("#sesssel"); if (ss) ss.onchange = () => { S.sessIdx = Number(ss.value); render(); };
   const sb = $("#sortby"); if (sb) sb.onchange = () => { S.sortBy = sb.value; render(); };
-  const fq = $("#fq"); if (fq) { fq.oninput = () => { S.q = fq.value; if (S.cmdOpen) render(); }; fq.onchange = () => render(); }
-  $$("[data-clearf]").forEach((b) => (b.onclick = () => { S.q = ""; S.statusFilter = ""; render(); }));
+  const kf = $("#kindf"); if (kf) kf.onchange = () => { S.kindFilter = kf.value; render(); };
+  const fq = $("#fq"); if (fq) { fq.oninput = () => { S.q = fq.value; const f2 = $("#fq2"); if (f2 && f2.value !== fq.value) { f2.value = fq.value; } if (S.cmdOpen) render(); }; fq.onchange = () => render(); }
+  const fq2 = $("#fq2"); if (fq2) { fq2.oninput = () => { S.q = fq2.value; if (fq) fq.value = fq2.value; }; fq2.onchange = () => render(); }
+  $$("[data-clearf]").forEach((b) => (b.onclick = () => { S.q = ""; S.statusFilter = ""; S.kindFilter = "all"; render(); }));
   const nt = $("#newtask"); if (nt) nt.onclick = () => { S.showReq = true; render(); wireReq(); };
+  const nt2 = $("#newtask2"); if (nt2) nt2.onclick = () => { S.showReq = true; render(); wireReq(); };
   const cmds = $("#cmds"); if (cmds) cmds.onclick = () => { S.cmdOpen = true; S.cmdIdx = 0; render(); };
   const cx = $("#cmdx"); if (cx) cx.onclick = () => { S.cmdOpen = false; render(); };
   $$("[data-cmd]").forEach((b) => (b.onclick = () => {
@@ -137,7 +163,6 @@ function wireOnly() {
     if (v === "pause") { S.paused = !S.paused; render(); arm(); return; }
     S.view = v; S.sel = null; S.detail = null; render();
   }));
-  const ab = $("#autobtn"); if (ab) ab.onclick = () => { S.auto = !S.auto; render(); arm(); };
   const rs = $("#resume"); if (rs) rs.onclick = () => { S.paused = !S.paused; render(); arm(); };
   const rf = $("#refresh"); if (rf) rf.onclick = () => tick(true);
   const th = $("#theme"); if (th) th.onclick = () => { S.theme = S.theme === "dark" ? "light" : "dark"; render(); };
@@ -244,7 +269,7 @@ async function loadLoopDetail(id) {
 
 function arm() {
   if (S.timer) clearInterval(S.timer);
-  if (S.auto && S.cfg.enabled) S.timer = setInterval(() => tick(), Math.max(2, Number(S.cfg.refreshSec) || 3) * 1000);
+  if (S.auto && !S.paused && S.cfg.enabled) S.timer = setInterval(() => tick(), Math.max(2, Number(S.cfg.refreshSec) || 3) * 1000);
 }
 
 async function tick(force) {

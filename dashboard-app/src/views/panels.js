@@ -2,15 +2,17 @@
 // automations, todos, logs, request modal, command palette.
 // Pure render functions — state + events live in main.js.
 import { S, esc, AGENT_OPTS, streamName, streamPipes } from "./state.js";
+import { pageHead, statRow, emptyState, section, pill, toolbar, searchBox, selectBox, icon } from "./ui.js";
 export function configView() {
   const c = S.cfgData;
   if (!c) return `<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><div class="skel" style="height:12px;width:75%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;
   const provs = c.providers?.providers || [];
   const agents = c.agents?.agents || [];
-  return `<div class="card"><h3>Configuration <span class="hint">providers · models · default prompts</span></h3>
-  ${S.cfgMsg ? `<div class="notice ok">${esc(S.cfgMsg)}</div>` : ""}
-  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${esc(c.providers?.defaultProvider || "muse")}). Empty prompt uses the agent's defaultPrompt. Muse CLI sessions write step JSON to data/responses/&lt;runId&gt;/stepN.json.</p>
-  <h4>PROVIDERS (default: ${esc(c.providers?.defaultProvider || "muse")})</h4>
+  return `
+  ${pageHead("Configuration", "providers · models · default prompts", `<button class="btn sm primary" id="cfgsave">${icon("save")} Save configuration</button>`)}
+  ${S.cfgMsg ? `<div class="notice ok">${icon("check-circle-2")} ${esc(S.cfgMsg)}</div>` : ""}
+  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${esc(c.providers?.defaultProvider || "muse")}). Empty prompt uses the agent's defaultPrompt.</p>
+  ${section(`Providers (default: ${c.providers?.defaultProvider || "muse"})`, `
   <div class="tblwrap"><table class="tbl"><thead><tr><th>ID</th><th>Type</th><th>Model default</th><th>Key env</th><th>Endpoint</th></tr></thead><tbody>
   ${provs.map((p, i) => `<tr><td><b>${esc(p.id)}</b></td><td>${esc(p.type)}</td>
   <td>${p.type === "muse"
@@ -18,9 +20,8 @@ export function configView() {
     : `<input data-cprov="${i}" data-cf="modelDefault" value="${esc(p.modelDefault || "")}" placeholder="gpt-5.6-terra">`}</td>
   <td class="dim">${esc(p.keyEnv || "")}</td><td class="dim">${esc((p.endpoint || "").slice(0, 50))}</td></tr>`).join("")}
   </tbody></table></div>
-  <div class="row"><label class="fld"><span>Default provider</span><select id="cfg-defprov">${provs.map((p) => `<option ${c.providers?.defaultProvider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label></div>
-  <h4>AGENTS (${agents.length})</h4>
-  ${agents.map((a, i) => `<div class="stepcard"><div class="row"><b>${esc(a.id)}</b><span class="hint">${esc(a.description || "")}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${esc(a.id)}">▶ Test default prompt</button></div>
+  <div class="row"><label class="fld"><span>Default provider</span><select id="cfg-defprov">${provs.map((p) => `<option ${c.providers?.defaultProvider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label></div>`)}
+  ${section(`Agents (${agents.length})`, agents.map((a, i) => `<div class="stepcard"><div class="row"><b>${icon("bot")} ${esc(a.id)}</b><span class="hint">${esc(a.description || "")}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${esc(a.id)}">${icon("play")} Test default prompt</button></div>
   <div class="row"><label class="fld"><span>Provider</span><select data-cagent="${i}" data-cf="provider"><option value="">(default)</option>${provs.map((p) => `<option ${a.provider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label>
   <label class="fld"><span>Model (empty = provider default)</span>${(a.provider || c.providers?.defaultProvider) === "muse" || (!a.provider && c.providers?.defaultProvider === "muse")
     ? `<select data-cagent="${i}" data-cf="model"><option value="">(provider default)</option>${["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-spark"].map((m) => `<option ${(a.model || a.deployment) === m ? "selected" : ""}>${m}</option>`).join("")}</select>`
@@ -28,30 +29,41 @@ export function configView() {
   <label class="fld"><span>Default prompt (used when dispatch prompt is empty)</span><textarea data-cagent="${i}" data-cf="defaultPrompt" rows="2">${esc(a.defaultPrompt || "")}</textarea></label>
   <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${esc(a.id)}" placeholder="empty = agent model"></label>
   <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${esc(a.id)}" placeholder="empty = defaultPrompt"></label></div>
-  <div id="cfgtest-out-${esc(a.id)}"></div></div>`).join("")}
-  <div class="row"><button class="btn sm primary" id="cfgsave">Save configuration</button></div>
-  <h4>STREAMS (${(c.streams?.streams || []).length}) <span class="hint">streams replace repos</span></h4>
-  ${(c.streams?.streams || []).map((s) => `<div class="appr"><div class="row"><b>🌊 ${esc(s.name || s.id)}</b><span class="kbd">${esc(s.id)}</span><span class="spacer"></span><span class="hint">${esc(s.description || "")}</span></div>
-  <p class="hint">agents: ${(s.agents || []).map(esc).join(", ") || "—"}</p></div>`).join("") || `<p class="hint">No streams — add them in Setup Step 6.</p>`}
-  <h4>TASK PIPELINES (${(c.streams?.pipelines || []).length}) <span class="hint">agent → agent chains</span></h4>
-  ${(c.streams?.pipelines || []).map((p) => `<div class="appr"><div class="row"><b>⛓️ ${esc(p.name || p.id)}</b><span class="kbd">${esc(p.stream || "")}</span><span class="spacer"></span><span class="hint">${esc(p.description || "")}</span></div>
-  <p class="hint">${(p.agents || []).map(esc).join(" → ") || "—"}</p></div>`).join("") || `<p class="hint">No pipelines — add them in Setup Step 6.</p>`}
-  <p class="hint">Edit streams + pipelines in Setup Step 6 (Streams) — Control Room is read-only here.</p></div>`;
+  <div id="cfgtest-out-${esc(a.id)}"></div></div>`).join("") + `<div class="row"><button class="btn sm primary" id="cfgsave2">${icon("save")} Save configuration</button></div>`)}
+  ${section(`Streams (${(c.streams?.streams || []).length})`, (c.streams?.streams || []).map((s) => `<div class="appr"><div class="row"><b>${icon("waves")} ${esc(s.name || s.id)}</b><span class="kbd">${esc(s.id)}</span><span class="spacer"></span><span class="hint">${esc(s.description || "")}</span></div>
+  <p class="hint">agents: ${(s.agents || []).map(esc).join(", ") || "—"}</p></div>`).join("") || `<p class="hint">No streams — add them in Setup Step 6.</p>`, `<span class="hint">read-only here</span>`)}
+  ${section(`Task pipelines (${(c.streams?.pipelines || []).length})`, (c.streams?.pipelines || []).map((p) => `<div class="appr"><div class="row"><b>${icon("git-branch")} ${esc(p.name || p.id)}</b><span class="kbd">${esc(p.stream || "")}</span><span class="spacer"></span><span class="hint">${esc(p.description || "")}</span></div>
+  <p class="hint">${(p.agents || []).map(esc).join(" → ") || "—"}</p></div>`).join("") || `<p class="hint">No pipelines — add them in Setup Step 6.</p>`, `<span class="hint">read-only here</span>`)}`;
 }
 
 export function agentsView() {
-  return `<div class="agrid">${(S.agents || []).map((a) => `
-    <div class="card"><h3>${esc(a.id)}</h3><p class="desc">${esc(a.description || "—")}</p>
+  return `
+  ${pageHead("Agents", `${(S.agents || []).length} configured`)}
+  ${statRow([
+    { icon: "bot", label: "Agents", value: (S.agents || []).length },
+    { icon: "layers", label: "Runs (30d)", value: (S.agents || []).reduce((n, a) => n + (a.runs ?? 0), 0) },
+    { icon: "coins", label: "Tokens (30d)", value: (S.agents || []).reduce((n, a) => n + (a.tokens ?? 0), 0).toLocaleString() },
+  ])}
+  <div class="agrid">${(S.agents || []).map((a) => `
+    <div class="card agent"><h3>${icon("bot")} ${esc(a.id)}</h3><p class="desc">${esc(a.description || "—")}</p>
     <p><span class="kbd">${esc(a.model || a.provider || "default")}</span></p>
-    <div class="arow"><span>Runs</span><b>${a.runs ?? 0}</b></div>
-    <div class="arow"><span>Tokens</span><b>${(a.tokens ?? 0).toLocaleString()}</b></div></div>`).join("") || `<div class="empty">No agents.</div>`}</div>`;
+    <div class="arow"><span>${icon("layers")} Runs</span><b>${a.runs ?? 0}</b></div>
+    <div class="arow"><span>${icon("coins")} Tokens</span><b>${(a.tokens ?? 0).toLocaleString()}</b></div></div>`).join("") || emptyState("bot", "No agents", "Add agents in config/agents.json.")}</div>`;
 }
 
 export function toolsView() {
-  return `<div class="card"><div class="tblwrap"><table class="tbl"><thead><tr><th>Tool</th><th>Kind</th><th>Auth</th><th>Calls</th><th>Avg ms</th></tr></thead><tbody>
+  const ok = (S.tools || []).filter((t) => t.auth !== "needed").length;
+  return `
+  ${pageHead("Tools", `${(S.tools || []).length} tools · ${ok} authed`)}
+  ${statRow([
+    { icon: "wrench", label: "Tools", value: (S.tools || []).length },
+    { icon: "check-circle-2", label: "Authed", value: ok, tone: "ok" },
+    { icon: "key-round", label: "Need sign-in", value: (S.tools || []).length - ok, tone: (S.tools || []).length - ok ? "warn" : "" },
+  ])}
+  ${section("Tool registry", `<div class="tblwrap"><table class="tbl"><thead><tr><th>Tool</th><th>Kind</th><th>Auth</th><th>Calls</th><th>Avg ms</th></tr></thead><tbody>
   ${(S.tools || []).map((t) => `<tr><td><b>${esc(t.id)}</b></td><td>${esc(t.kind)}</td>
-  <td>${t.auth === "needed" ? `<span class="tag bad">🔐 sign-in</span>` : `<span class="tag ok">✅</span>`}</td>
-  <td>${t.calls ?? 0}</td><td>${t.avgMs ?? 0}</td></tr>`).join("")}</tbody></table></div></div>`;
+  <td>${t.auth === "needed" ? pill("failed") + ` <span class="hint">sign-in</span>` : pill("done")}</td>
+  <td>${t.calls ?? 0}</td><td>${t.avgMs ?? 0}</td></tr>`).join("") || `<tr><td colspan="5">${emptyState("wrench", "No tools", "Connect MCP servers in config/tools.json.")}</td></tr>`}</tbody></table></div>`)}`;
 }
 
 export function brainView() {
@@ -64,24 +76,27 @@ export function brainView() {
   const txt = (x) => x.messageText || x.text || "";
   const ts = (x) => x.receivedAt || x.ts || "";
   const st = (x) => x.processingStatus || x.status || "queued";
-  return `<div class="card"><h3>Brain messages <span class="hint">Teams / Brain</span></h3>
-  <p class="hint">Poller ${b.poller?.enabled ? "enabled" : "off"} · interval ${b.poller?.intervalMin || 2} min · Completion updates ${b.poller?.completionUpdates ? "on" : "off"} · channel ${esc(b.poller?.channel || "discord")}</p>
-  <div class="mrow">
-    <span class="m">Incoming <b>${m.incoming ?? msgs.length}</b></span><span class="m">Queued <b>${m.queued ?? 0}</b></span>
-    <span class="m">Running <b>${m.running ?? 0}</b></span><span class="m bad">Failed / interrupted <b>${m.failed ?? 0}</b></span>
-    <span class="m">Outbox <b>${S.outbox.length}</b></span><span class="m">Sent <b>${m.replied ?? 0}</b></span>
-  </div>
+  return `
+  ${pageHead("Brain messages", `${msgs.length} shown`, `<span class="hint">${icon("rss")} poller ${b.poller?.enabled ? "on" : "off"} · ${b.poller?.intervalMin || 2} min · #${esc(b.poller?.channel || "discord")}</span>`)}
+  ${statRow([
+    { icon: "inbox", label: "Incoming", value: m.incoming ?? msgs.length },
+    { icon: "clock", label: "Queued", value: m.queued ?? 0 },
+    { icon: "loader", label: "Running", value: m.running ?? 0, tone: "run" },
+    { icon: "x-circle", label: "Failed", value: m.failed ?? 0, tone: "bad" },
+    { icon: "send", label: "Outbox", value: S.outbox.length },
+    { icon: "check-circle-2", label: "Sent", value: m.replied ?? 0, tone: "ok" },
+  ])}
   <p class="hint">Last scan: ${esc(b.poller?.lastScan ? String(b.poller.lastScan).slice(0, 19).replace("T", " ") : "—")}</p>
-  <div class="chatbox"><input id="brain-q" placeholder="Search message, sender, chat or job ID" value="${esc(S.brainQ)}"></div>
-  <div class="tblwrap"><table class="tbl"><thead><tr><th>Received</th><th>Sender / source</th><th>Incoming message</th><th>Processing</th><th>Outbox</th></tr></thead><tbody>
+  ${toolbar(searchBox("brain-q", S.brainQ, "Search message, sender, chat or job ID"))}
+  <div class="tblwrap"><table class="tbl"><thead><tr><th scope="col">Received</th><th scope="col">Sender / source</th><th scope="col">Incoming message</th><th scope="col">Processing</th><th scope="col">Outbox</th></tr></thead><tbody>
   ${msgs.map((x) => { const id = x.id || x.jobId; return `<tr data-brain="${esc(id)}" style="cursor:pointer;${S.brainSel === id ? "background:var(--acc-soft);" : ""}"><td class="dim">${esc(String(ts(x)).slice(0, 16).replace("T", " "))}</td>
   <td>${esc(x.sender)}<br><span class="hint">${esc(x.source || x.channelId || "discord")}</span></td>
   <td class="dim">${esc(String(txt(x)).slice(0, 160))}<br><span class="hint">${esc(x.jobId || x.id || "")}</span></td>
-  <td><span class="tag ${st(x) === "failed" ? "bad" : st(x) === "reply_generated" || st(x) === "replied" ? "ok" : "run"}">${esc(st(x))}</span></td>
-  <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5" class="hint">No messages</td></tr>`}
+  <td>${pill(st(x) === "failed" ? "failed" : st(x) === "reply_generated" || st(x) === "replied" ? "done" : "running")}<br><span class="hint">${esc(st(x))}</span></td>
+  <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5">${emptyState("brain", "No messages", "Discord mentions will land here.")}</td></tr>`}
   </tbody></table></div>
-  ${sel ? `<div class="appr"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx">✕</button></div>
-  <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">Message details</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">Session</button></div>
+  ${sel ? `<div class="appr"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx">${icon("x")}</button></div>
+  <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">${icon("terminal")} Session</button></div>
   ${S.brainTab === "details" ? `<div class="grid2"><span>Job ID</span><span class="kbd">${esc(sel.jobId || sel.id || "")}</span><span>Actor ID</span><span class="kbd">${esc(sel.actorId || "—")}</span><span>Conversation</span><span class="kbd">${esc(sel.conversationId || sel.channelId || "—")}</span><span>Updated</span><span>${esc(String(ts(sel)).slice(0, 19).replace("T", " "))}</span></div>
   ${sel.linkedTaskId ? `<p class="dim">Linked work: <span class="kbd">${esc(sel.linkedTaskId)}</span></p>` : ""}
   ${sel.processingError ? `<div class="status bad">${esc(sel.processingError)}</div>` : ""}
@@ -90,48 +105,72 @@ export function brainView() {
   : `<p class="dim">Runner: Discord poller · channel ${esc(sel.channelId || sel.conversationId || "—")}</p><pre class="out">${esc(String(sel.sessionLog || txt(sel)).slice(0, 2000))}</pre>`}</div>` : ""}</div>`;
 }
 
+const pipeAgents = (r) => {
+  try { const a = JSON.parse(r.pipeline || "[]"); if (Array.isArray(a) && a.length) return a.map(esc).join(" → "); } catch { /* not JSON — fall through */ }
+  return esc(typeof r.pipeline === "string" && r.pipeline ? r.pipeline : (r.task_type || "—"));
+};
+
 export function requestsView() {
-  return `<div class="card"><h3>Requests <span class="hint">${S.requests.length} intake</span></h3>
+  return `
+  ${pageHead("Requests", `${S.requests.length} intake`, `<button type="button" class="btn sm primary" id="newtask2">${icon("plus")} New task</button>`)}
   <p class="hint">Raw goals awaiting / passed through the task-divider. Newest first.</p>
-  ${S.requests.map((r) => `<div class="appr"><div class="row"><b>${esc(String(r.text || "").slice(0, 90))}</b><span class="spacer"></span><span class="tag ${r.status === "running" ? "run" : ""}">${esc(r.status || "queued")}</span></div>
-  <p class="hint">mode ${esc(r.mode)} · stream ${esc(streamName(r.repo) || r.repo)} · agents ${(JSON.parse(r.pipeline || "[]") || []).map(esc).join(" → ") || esc(r.task_type || "—")} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || `<p class="hint">No requests yet — hit + New task.</p>`}</div>`;
+  ${S.requests.map((r) => `<div class="appr"><div class="row">${icon("inbox")}<b>${esc(String(r.text || "").slice(0, 90))}</b><span class="spacer"></span>${pill(r.status === "running" ? "running" : "queued")}</div>
+  <p class="hint">mode ${esc(r.mode)} · stream ${esc(streamName(r.repo) || r.repo)} · agents ${pipeAgents(r)} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || emptyState("inbox", "No requests yet", "Hit + New task to file your first goal.")}</div>`;
 }
 
 export function outboxView() {
-  return `<div class="card"><h3>Outbox <span class="hint">${S.outbox.length} queued/sent</span></h3>
-  <div class="chatbox"><input id="ob-in" placeholder="Queue a notification…"><button class="btn sm" id="ob-add">Queue</button></div>
-  ${S.outbox.map((o) => `<div class="appr"><div class="row"><span class="tag ${o.status === "sent" ? "ok" : "run"}">${esc(o.status)}</span><b>${esc(String(o.text || "").slice(0, 120))}</b><span class="spacer"></span>${o.status !== "sent" ? `<button class="btn sm ghost" data-obsent="${esc(o.id)}">Mark sent</button>` : `<span class="hint">${esc(String(o.sent_at || "").slice(0, 16).replace("T", " "))}</span>`}</div>
-  <p class="hint">${esc(o.channel || "default")} · ${esc(String(o.created_at || "").slice(0, 16).replace("T", " "))}${o.run_id ? ` · run ${esc(o.run_id)}` : ""}</p></div>`).join("") || `<p class="hint">Outbox empty.</p>`}</div>`;
+  return `
+  ${pageHead("Outbox", `${S.outbox.length} queued/sent`)}
+  <div class="chatbox"><input id="ob-in" placeholder="Queue a notification…"><button class="btn sm primary" id="ob-add">${icon("send")} Queue</button></div>
+  ${S.outbox.map((o) => `<div class="appr"><div class="row">${pill(o.status)}<b>${esc(String(o.text || "").slice(0, 120))}</b><span class="spacer"></span>${o.status !== "sent" ? `<button class="btn sm ghost" data-obsent="${esc(o.id)}">Mark sent</button>` : `<span class="hint">${esc(String(o.sent_at || "").slice(0, 16).replace("T", " "))}</span>`}</div>
+  <p class="hint">${esc(o.channel || "default")} · ${esc(String(o.created_at || "").slice(0, 16).replace("T", " "))}${o.run_id ? ` · run ${esc(o.run_id)}` : ""}</p></div>`).join("") || emptyState("send", "Outbox empty", "Queued notifications will appear here.")}</div>`;
 }
 
 export function retroView() {
   const r = S.retro;
   if (!r) return `<div class="card" aria-busy="true"><h3>Retro</h3><div class="skel" style="height:18px;width:50%"></div><div class="skel" style="height:12px;width:85%"></div><p class="hint">Loading retrospective…</p></div>`;
-  return `<div class="card"><h3>Retro <span class="hint">last ${esc(String(r.since || "").slice(0, 10))} → now</span></h3>
-  <div class="agrid">
-  <div class="card"><h3>Runs</h3><div class="arow"><span>Total</span><b>${r.runs?.c ?? 0}</b></div><div class="arow"><span>Avg duration</span><b>${Math.round(r.runs?.avgSec || 0)}s</b></div></div>
-  <div class="card"><h3>Tokens / tools</h3><div class="arow"><span>Tokens</span><b>${Number(r.runs?.t || 0).toLocaleString()}</b></div><div class="arow"><span>Tool calls</span><b>${r.runs?.tc ?? 0}</b></div></div>
-  <div class="card"><h3>By status</h3>${(r.byStatus || []).map((s) => `<div class="arow"><span>${esc(s.status)}</span><b>${s.c}</b></div>`).join("") || `<p class="hint">—</p>`}</div>
-  <div class="card"><h3>Retries (workflow × runs)</h3>${(r.retries || []).map((s) => `<div class="arow"><span>${esc(s.workflow_id)}</span><b>${s.c}</b></div>`).join("") || `<p class="hint">No repeats — deterministic.</p>`}</div>
-  </div>
-  <h3>Delivery velocity</h3><div class="logbox">${(r.byDay || []).map((d) => `<div class="lrow info"><span class="lt">${esc(d.d)}</span><span class="ltag">${d.c} runs</span></div>`).join("")}</div></div>`;
+  const byStatus = (r.byStatus || []).map((s) => ({ icon: s.status === "done" ? "check-circle-2" : s.status === "failed" ? "x-circle" : "loader", label: s.status, value: s.c, tone: s.status === "done" ? "ok" : s.status === "failed" ? "bad" : "run" }));
+  return `
+  ${pageHead("Retro", `last ${esc(String(r.since || "").slice(0, 10))} → now`)}
+  ${statRow([
+    { icon: "layers", label: "Total runs", value: r.runs?.c ?? 0 },
+    { icon: "timer", label: "Avg duration", value: `${Math.round(r.runs?.avgSec || 0)}s` },
+    { icon: "coins", label: "Tokens", value: Number(r.runs?.t || 0).toLocaleString() },
+    { icon: "wrench", label: "Tool calls", value: r.runs?.tc ?? 0 },
+  ])}
+  ${section("Runs by status", byStatus.length ? `<div class="mrow">${byStatus.map((s) => `<span class="m ${s.tone}">${icon(s.icon)} ${esc(s.label)} <b>${s.value}</b></span>`).join("")}</div>` : `<p class="hint">—</p>`)}
+  ${section("Delivery velocity", `<div class="chartbox"><canvas id="retro-chart" height="120"></canvas></div>`, `<span class="hint">${(r.byDay || []).length} days</span>`)}
+  ${section("Retries", (r.retries || []).length ? (r.retries || []).map((s) => `<div class="arow"><span>${esc(s.workflow_id)}</span><b>${s.c}</b></div>`).join("") : `<p class="hint">No repeats — deterministic.</p>`)}`;
+}
+
+export function paintRetroChart() {
+  try {
+    const cv = document.getElementById("retro-chart");
+    if (!cv || !window.Chart) return;
+    const days = (S.retro?.byDay || []).slice(-14);
+    if (window._retroChart) window._retroChart.destroy();
+    window._retroChart = new window.Chart(cv, {
+      type: "bar",
+      data: { labels: days.map((d) => String(d.d).slice(5)), datasets: [{ data: days.map((d) => d.c), borderRadius: 5, backgroundColor: "rgba(91,157,255,.65)" }] },
+      options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { color: "#8b98ad", font: { size: 10 } }, grid: { display: false } }, y: { beginAtZero: true, ticks: { color: "#8b98ad", precision: 0 }, grid: { color: "rgba(42,53,71,.5)" } } } },
+    });
+  } catch { /* chart lib missing — stat cards still carry the numbers */ }
 }
 
 export function flowsView() {
   const TPL = [
-    ["triage", "⚡ Triage every blocked task", "When a task blocks, an investigator agent reads the evidence and posts a summary to the outbox."],
-    ["nightly", "⚡ Nightly knowledge sweep", "A scheduled agent run — no task, no PR. Good for curation, reporting and housekeeping."],
-    ["onetime", "⚡ One-time: investigate, then fix", "A single run: an agent scopes the problem, a condition gates it, then a real task is enqueued."],
+    ["triage", "Triage every blocked task", "When a task blocks, an investigator agent reads the evidence and posts a summary to the outbox.", "siren"],
+    ["nightly", "Nightly knowledge sweep", "A scheduled agent run — no task, no PR. Good for curation, reporting and housekeeping.", "moon"],
+    ["onetime", "One-time: investigate, then fix", "A single run: an agent scopes the problem, a condition gates it, then a real task is enqueued.", "zap"],
   ];
   const ed = S.flowEdit;
-  const fb = S.flowMsg ? `<div class="notice ok">⚡ ${esc(S.flowMsg)}</div>` : "";
+  const fb = S.flowMsg ? `<div class="notice ok">${icon("zap")} ${esc(S.flowMsg)}</div>` : "";
+  const enabled = (S.flows || []).filter((f) => f.enabled !== false).length;
   return `<div class="flows">${fb}
-  <div class="bhead"><h2>Automations <span class="hint">${S.flows.length} flow(s)</span></h2><span class="spacer"></span><button class="btn sm primary" id="flownew">+ New flow</button></div>
+  ${pageHead("Automations", `${S.flows.length} flow(s) · ${enabled} enabled`, `<button class="btn sm primary" id="flownew">${icon("plus")} New flow</button>`)}
   <p class="hint">Scheduled cron jobs, event-driven policy sweeps, and agent housekeeping routines.</p>
-  <h4>START FROM A TEMPLATE</h4>
-  <div class="agrid">${TPL.map(([id, t, d]) => `<div class="card tpl" data-tpl="${id}"><h3>${esc(t)}</h3><p class="dim">${esc(d)}</p></div>`).join("")}</div>
-  <h4>YOUR FLOWS</h4>
-  ${(S.flows || []).map((f) => {
+  ${section("Start from a template", `<div class="agrid">${TPL.map(([id, t, d, ic]) => `<button type="button" class="card tpl" data-tpl="${id}"><h3>${icon(ic)} ${esc(t)}</h3><p class="dim">${esc(d)}</p></button>`).join("")}</div>`)}
+  ${section("Your flows", (S.flows || []).map((f) => {
     const trig = f.trigger?.type || f.trigger || "manual";
     const preset = trig === "schedule" ? (f.trigger?.preset || f.trigger?.label || `${f.trigger?.timeOfDay || f.trigger?.cron || "Scheduled"}`) : trig === "manual" ? "Manual" : (f.trigger?.rule || "Event");
     return `<div class="flowcard"><div class="row"><div><h3>${esc(f.title || f.id)}</h3><p class="dim">${esc(f.description || "")}</p></div><span class="spacer"></span>
@@ -143,7 +182,7 @@ export function flowsView() {
   <div class="row"><span class="kbd">${esc(preset)}</span><span class="kbd">${esc(f.configFileName || f.id + ".json")}</span>
   ${f.state?.next_run_at ? `<span class="hint">Next: ${esc(String(f.state.next_run_at).slice(0, 16).replace("T", " "))}</span>` : ""}<span class="hint">last: ${esc(f.state?.last_status || f.lastStatus || "never")}</span></div>
   <div class="pipe">${(f.steps || []).map((s, i) => `<div class="pnode"><b>${esc(s.title || s.id || s.type)}</b><span>${esc(s.type || "")}</span></div>${i < (f.steps || []).length - 1 ? `<span class="arr">→</span>` : ""}`).join("")}</div></div>`;
-  }).join("") || `<div class="empty">No flows — start from a template above.</div>`}
+  }).join("") || emptyState("workflow", "No flows", "Start from a template above."))}
   ${ed ? `<div class="modal"><div class="mbox wide"><div class="dhead"><b>Edit flow '${esc((ed.configFileName || ed.id || "new").replace(".json", ""))}'</b><span class="spacer"></span><button class="btn ghost sm" id="flowx">✕</button></div>
   <p class="hint">Steps run top to bottom. Reference earlier output with <span class="kbd">{{steps.&lt;id&gt;.output}}</span> and the trigger with <span class="kbd">{{trigger.&lt;field&gt;}}</span>.</p>
   <h4>TRIGGER</h4>
@@ -172,28 +211,33 @@ export function nextRunHint() {
 }
 
 export function todosView() {
-  const tabs = [["open", "Open"], ["done", "Done"], ["dismissed", "Dismissed"], ["all", "All"]];
+  const tabs = [["open", "Open", "circle"], ["done", "Done", "check-circle-2"], ["dismissed", "Dismissed", "archive"], ["all", "All", "list"]];
   let list = (S.todos || []).filter((t) =>
     (S.todoTab === "all" || t.status === S.todoTab) &&
     (!S.todoQ || (t.text || "").toLowerCase().includes(S.todoQ.toLowerCase())) &&
     (S.todoSource === "all" || (t.project || "").includes(S.todoSource) || S.todoSource === "manual"));
-  return `<div class="card"><h3>TODOs</h3>
-  <div class="row" role="tablist" aria-label="TODO status">${tabs.map(([v, l]) => `<button type="button" role="tab" aria-selected="${S.todoTab === v}" class="tab ${S.todoTab === v ? "on" : ""}" data-ttab="${v}">${l}</button>`).join("")}<span class="spacer"></span><button type="button" class="btn sm primary" id="todo-new">+ New TODO</button></div>
-  ${S.todoForm ? `<div class="appr" role="dialog" aria-label="New TODO"><label class="fld"><span>TODO text</span><input id="todo-title" placeholder="What needs to be done?"></label><div class="row"><button type="button" class="btn sm primary" id="todocreate">Add TODO</button><button type="button" class="btn sm ghost" id="todocancel">Cancel</button></div></div>` : ""}
-  <div class="row"><div class="chatbox" style="flex:1"><label class="sr" for="todo-q">Search TODOs</label><input id="todo-q" type="search" placeholder="Search TODOs" value="${esc(S.todoQ)}"></div>
-  <label class="sr" for="todo-src">Filter by source</label><select id="todo-src" class="sel"><option value="all">All sources</option><option value="flow:" ${S.todoSource === "flow:" ? "selected" : ""}>Flows</option><option value="manual" ${S.todoSource === "manual" ? "selected" : ""}>Manual</option></select>
-  <label class="sr" for="todo-sort">Sort order</label><select id="todo-sort" class="sel"><option>Newest first</option></select></div>
-  ${list.slice(0, 30).map((t) => `<div class="appr"><div class="row"><span class="tag">${esc(t.priority)}</span><span>${esc(t.text)}</span><span class="spacer"></span><span class="hint">${esc(t.id)} · ${esc(String(t.created_at || "").slice(0, 10))}</span></div>
-  <div class="row">${t.status === "open" ? `<button type="button" class="btn sm ghost" data-tdone="${esc(t.id)}">Done</button><button type="button" class="btn sm ghost" data-tdis="${esc(t.id)}">Dismiss</button><button type="button" class="btn sm" data-tconv="${esc(t.id)}">Convert to request</button>` : `<span class="tag ${t.status === "done" ? "ok" : ""}">${esc(t.status)}</span>`}</div></div>`).join("") || `<div class="empty" role="status">No TODOs yet — they appear here when created manually or discovered by inbox sweepers.</div>`}
-  <div class="chatbox"><label class="sr" for="todo-in">Quick add TODO</label><input id="todo-in" placeholder="+ new todo…"><button type="button" class="btn sm" id="todo-add">Add</button></div></div>`;
+  const open = (S.todos || []).filter((t) => t.status === "open").length;
+  return `
+  ${pageHead("TODOs", `${open} open`, `<button type="button" class="btn sm primary" id="todo-new">${icon("plus")} New TODO</button>`)}
+  ${statRow([
+    { icon: "circle", label: "Open", value: open },
+    { icon: "check-circle-2", label: "Done", value: (S.todos || []).filter((t) => t.status === "done").length, tone: "ok" },
+    { icon: "archive", label: "Dismissed", value: (S.todos || []).filter((t) => t.status === "dismissed").length },
+  ])}
+  <div class="btabs" role="tablist" aria-label="TODO status">${tabs.map(([v, l, ic]) => `<button type="button" role="tab" aria-selected="${S.todoTab === v}" class="tab ${S.todoTab === v ? "on" : ""}" data-ttab="${v}">${icon(ic)} ${l}</button>`).join("")}</div>
+  ${S.todoForm ? `<div class="appr" role="dialog" aria-label="New TODO"><label class="fld"><span>TODO text</span><input id="todo-title" placeholder="What needs to be done?"></label><div class="row"><button type="button" class="btn sm primary" id="todocreate">${icon("plus")} Add TODO</button><button type="button" class="btn sm ghost" id="todocancel">Cancel</button></div></div>` : ""}
+  ${toolbar(searchBox("todo-q", S.todoQ, "Search TODOs") + selectBox("todo-src", [["all", "All sources"], ["flow:", "Flows"], ["manual", "Manual"]], S.todoSource, "Filter by source"))}
+  ${list.slice(0, 30).map((t) => `<div class="appr"><div class="row">${pill(t.status === "open" ? "queued" : t.status)}<span class="tag">${esc(t.priority)}</span><span>${esc(t.text)}</span><span class="spacer"></span><span class="hint">${esc(t.id)} · ${esc(String(t.created_at || "").slice(0, 10))}</span></div>
+  <div class="row">${t.status === "open" ? `<button type="button" class="btn sm ghost" data-tdone="${esc(t.id)}">${icon("check")} Done</button><button type="button" class="btn sm ghost" data-tdis="${esc(t.id)}">${icon("archive")} Dismiss</button><button type="button" class="btn sm" data-tconv="${esc(t.id)}">${icon("arrow-right")} Convert to request</button>` : pill(t.status)}</div></div>`).join("") || emptyState("list-checks", "No TODOs", "They appear here when created manually or discovered by inbox sweepers.")}
+  <div class="chatbox"><label class="sr" for="todo-in">Quick add TODO</label><input id="todo-in" placeholder="+ new todo…"><button type="button" class="btn sm primary" id="todo-add">${icon("plus")} Add</button></div></div>`;
 }
 
 export function logsView() {
-  return `<div class="card"><div class="tbar"><select id="loglevel"><option value="">All levels</option>
-  ${["info", "error"].map((l) => `<option ${S.logLevel === l ? "selected" : ""}>${l}</option>`).join("")}</select>
-  <button class="btn sm" id="logref">Refresh</button></div>
+  return `
+  ${pageHead("Logs", `${(S.logs || []).length} entries`, `<button class="btn sm" id="logref">${icon("refresh-cw")} Refresh</button>`)}
+  ${toolbar(selectBox("loglevel", [["", "All levels"], ["info", "Info"], ["error", "Errors"]], S.logLevel || "", "Log level"))}
   <div class="logbox">${(S.logs || []).map((l) => `<div class="lrow ${esc(l.level)}"><span class="lt">${esc(String(l.created_at || "").slice(5, 19).replace("T", " "))}</span>
-  <span class="ltag">${esc(l.level)}</span><span class="lsrc">${esc(l.source || "")}</span><span>${esc(l.message || "")}</span></div>`).join("") || `<p class="hint">No logs</p>`}</div></div>`;
+  <span class="ltag">${esc(l.level)}</span><span class="lsrc">${esc(l.source || "")}</span><span>${esc(l.message || "")}</span></div>`).join("") || emptyState("scroll-text", "No logs", "Logs stream here as the bot works.")}</div></div>`;
 }
 
 // ---------- request modal (PRD 4.5: Request/Direct, repo, 15 types, pipeline, attach) ----------

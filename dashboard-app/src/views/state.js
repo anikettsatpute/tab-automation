@@ -5,7 +5,8 @@ export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 export const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export const S = {
-  view: "board", boardTab: "tasks", detailTab: "overview", sel: null, detail: null,
+  view: "board", boardTab: "attention", detailTab: "overview", sel: null, detail: null, fromTab: null,
+  kindFilter: "all", lastOk: 0,
   cfg: { enabled: true, refreshSec: 3 },
   ov: null, tasks: [], agents: [], tools: [], activity: [], logs: [],
   approvals: [], todos: [], reminders: [], feed: null, brain: null, flows: [],
@@ -19,7 +20,7 @@ export const S = {
   loopTasks: [], loopSel: null, loopDetail: null, loopForm: null, todoForm: false,
   taskTypes: [],
   cmdOpen: false, cmdIdx: 0, theme: "dark",
-  groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all",
+  groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all", showTypes: false,
   showCtx: false, sessIdx: 0, diagFull: false, reqChanges: "", appendTitle: "",
   paused: false, confirmDel: false, statusMsg: "", _renderedModal: false,
 };
@@ -56,6 +57,37 @@ export const statusBadge = (st) => {
   const m = { done: ["Done", "ok"], failed: ["Blocked", "bad"], blocked: ["Blocked", "bad"], running: ["Running", "run"], pr_review: ["PR review", "review"], plan_review: ["Plan review", "review"], size_review: ["Size review", "review"], your_review: ["Your review", "review"], queued: ["Queued", ""] };
   const [label, cls] = m[st] || [st || "—", ""];
   return `<span class="tag ${cls}">${esc(label)}</span>`;
+};
+
+// Where did this run come from? kind drives the origin chip + grouping.
+// schedule = cron automation · discord/discord-task/discord-pipeline = Discord
+// dashboard/dashboard-requeue = Control Room · chat = Assistant · manual = ad-hoc
+export const KIND_LABEL = {
+  schedule: "automation", discord: "discord", "discord-task": "discord",
+  "discord-pipeline": "discord", dashboard: "control room",
+  "dashboard-requeue": "control room", chat: "assistant", manual: "manual",
+};
+
+export const kindOf = (r) => String(r?.kind || r?.taskType || "manual").toLowerCase();
+export const kindLabel = (r) => KIND_LABEL[kindOf(r)] || kindOf(r) || "manual";
+export const isAutomationRun = (r) => kindOf(r) === "schedule";
+export const needsAttention = (r) => r?.status === "failed" || !!r?.blockedReason || !!r?.prUrl;
+
+// Titles leak raw Discord markup (<@&123>, <#456>) and generic finance
+// labels ("india"). Clean them once, everywhere cards/banners/detail render.
+export const cleanTitle = (t) => String(t ?? "")
+  .replace(/<@!?&?\d+>/g, "").replace(/<#\d+>/g, "").replace(/<:\w+:\d+>/g, "")
+  .replace(/\s{2,}/g, " ").trim();
+
+const GENERIC_TITLES = new Set(["india", "us", "general", "task", "new task", "untitled", "—", "-"]);
+
+export const displayTitle = (r) => {
+  const c = cleanTitle(r?.title || r?.workflow || "task");
+  if (!c || GENERIC_TITLES.has(c.toLowerCase())) {
+    const w = String(r?.workflow || r?.taskType || r?.kind || "task");
+    return w.replace(/[-_]+/g, " ").trim() || "task";
+  }
+  return c;
 };
 
 export function setStatus(msg) {
