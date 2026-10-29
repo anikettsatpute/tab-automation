@@ -25,14 +25,30 @@ export async function getQuote(symbol, attempt = 0) {
   const host = YAHOO_HOSTS[(yahooHostIdx + attempt) % YAHOO_HOSTS.length];
   try {
     // range=1mo guarantees >=2 trading closes across weekends/holidays.
-    // range=5d was dropping the prior session (e.g. Mon close missing on Tue).
-    const raw = await fetchText(`${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1mo`);
-    const data = JSON.parse(raw);
-    const result = data?.chart?.result?.[0];
-    const stamps = result?.timestamp ?? [];
-    const rawCloses = result?.indicators?.quote?.[0]?.close ?? [];
-    // Pair timestamps with non-null closes, then take last 2 TRADING sessions.
-    const sessions = stamps.map((t, i) => ({ t, c: rawCloses[i] })).filter((s) => s.c != null);
+    // range=5d is the default: small payload, rarely 429s, usually 2+ sessions.
+    // Only escalate to 1mo when 5d has <2 sessions (weekend/holiday edge).
+    // (1mo payloads trigger Yahoo's 429 throttle when fetched 30x in a row.)
+    let raw;
+    try {
+      raw = await fetchText(`${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`);
+    } catch (err) {
+      if (/429/.test(String(err.message || err))) throw err; // retry path below
+      throw err;
+    }
+    let data = JSON.parse(raw);
+    let result = data?.chart?.result?.[0];
+    let stamps = result?.timestamp ?? [];
+    let rawCloses = result?.indicators?.quote?.[0]?.close ?? [];
+    let sessions = stamps.map((t, i) => ({ t, c: rawCloses[i] })).filter((s) => s.c != null);
+    if (sessions.length < 2) {
+      raw = await fetchText(`${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1mo`);
+      data = JSON.parse(raw);
+      result = data?.chart?.result?.[0];
+      stamps = result?.timestamp ?? [];
+      rawCloses = result?.indicators?.quote?.[0]?.close ?? [];
+      // Pair timestamps with non-null closes, then take last 2 TRADING sessions.
+      sessions = stamps.map((t, i) => ({ t, c: rawCloses[i] })).filter((s) => s.c != null);
+    }
     if (sessions.length < 2) return { symbol, error: "insufficient data" };
     const prev = sessions[sessions.length - 2];
     const last = sessions[sessions.length - 1];
@@ -51,22 +67,25 @@ export async function getQuote(symbol, attempt = 0) {
     };
   } catch (err) {
     const msg = String(err.message || err);
-    // Rotate host + backoff on rate limit, up to 5 attempts
-    if (/429/.test(msg) && attempt < 5) {
+    // Bounded retries: 2 attempts max, then give up fast so the briefing
+    // falls back to cached quotes instead of stalling for minutes.
+    // (Unbounded 6x retry with 3-20s backoff = 30 symbols x minutes = wedged run.)
+    if (/429/.test(msg) && attempt < 2) {
       yahooHostIdx += 1;
-      await sleep(2000 * (attempt + 1));
+      await sleep(1500 + Math.random() * 1500);
       return getQuote(symbol, attempt + 1);
     }
     return { symbol, error: msg.slice(0, 120) };
   }
 }
 
-export async function getQuotes(symbols, concurrency = 2) {
+export async function getQuotes(symbols, concurrency = 4) {
   const out = [];
   for (let i = 0; i < symbols.length; i += concurrency) {
     const batch = await Promise.all(symbols.slice(i, i + concurrency).map((s) => getQuote(s)));
     out.push(...batch);
-    if (i + concurrency < symbols.length) await sleep(2500); // stay under Yahoo rate limit
+    // Short pause between batches; 5d payloads rarely 429 so no need for 6s.
+    if (i + concurrency < symbols.length) await sleep(1200);
   }
   return out;
 }
