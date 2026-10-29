@@ -105,6 +105,15 @@ export function startDiscord(cfg, deps) {
           await msg.reply(completeTodo(cfg.root, rest[0]) ? `✅ Done \`${rest[0]}\`.` : `No open todo \`${rest[0]}\`.`);
           return;
         }
+        if (cmd === "digest") {
+          // Test the todo-digest pipeline on demand (same steps as the 08:00 cron).
+          const wf = (cfg.workflows || []).find((w) => w.id === "todo-digest");
+          if (!wf) { await msg.reply("No todo-digest workflow configured."); return; }
+          await msg.channel.sendTyping().catch(() => {});
+          const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+          await deps.runWorkflow(wf, { kind: "discord", command: "digest", text: "", user: msg.author.tag, channelId: msg.channelId }, msg.channelId, replyTo);
+          return;
+        }
         if (cmd === "remind" && rest.length >= 2) {
           // !remind <ISO datetime> <text>  e.g. !remind 2026-10-27T12:00 fill the form
           const [at, ...words] = rest;

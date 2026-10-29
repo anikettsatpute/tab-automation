@@ -694,6 +694,27 @@ export function setAutomationEnabled(root, id, enabled) {
   openDb(root).prepare("UPDATE automations SET enabled = ?, updated_at = ? WHERE id = ?").run(enabled ? 1 : 0, now(), id);
 }
 
+// Cron-slot claim: cross-process mutex so two bots sharing a token/DB never
+// fire the same scheduled workflow twice. First claimer wins per slot key.
+// Returns true if this process won the slot (should run), false if taken.
+export function claimCronSlot(root, slotKey, ttlSec = 300) {
+  const db = openDb(root);
+  const t = now();
+  try {
+    db.prepare(
+      "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING"
+    ).run(`cron:${slotKey}`, t);
+    const row = db.prepare("SELECT value FROM kv WHERE key = ?").get(`cron:${slotKey}`);
+    if (row && row.value === t) return true; // we inserted -> we won
+    // Lost the race: check staleness (a crashed bot's claim expires).
+    if (row && (Date.now() - new Date(row.value).getTime()) > ttlSec * 1000) {
+      const r = db.prepare("UPDATE kv SET value = ? WHERE key = ? AND value = ?").run(t, `cron:${slotKey}`, row.value);
+      return r.changes > 0;
+    }
+    return false;
+  } catch { return true; }
+}
+
 export function markAutomationRun(root, automationId, { status = "", runId = null, nextRunAt = null } = {}) {
   openDb(root).prepare(
     "INSERT INTO automation_state (automation_id, last_run_at, next_run_at, last_status, last_run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?) " +

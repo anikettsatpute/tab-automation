@@ -65,6 +65,12 @@ export function startScheduler(cfg, deps) {
       if (!matchesCron(cron, now)) continue;
       if (seen.get(w.id) === key) continue;
       seen.set(w.id, key);
+      // Cross-process claim: a stale second bot with the same token must
+      // not fire the same cron (duplicate digests/briefings in Discord).
+      try {
+        const { claimCronSlot } = await import("./db.js");
+        if (!claimCronSlot(cfg.root, `${w.id}:${key}`)) { deps.log?.(`[scheduler] ${w.id} slot taken — skipping`); continue; }
+      } catch {}
       deps.log?.(`[scheduler] firing ${w.id}`);
       try {
         await deps.runWorkflow(w, { kind: "schedule", at: now.toISOString() });
@@ -87,6 +93,10 @@ export function startScheduler(cfg, deps) {
         const seenKey = `auto:${a.id}`;
         if (dueCron && seen.get(seenKey) === key) continue;
         seen.set(seenKey, key);
+        try {
+          const { claimCronSlot } = await import("./db.js");
+          if (dueCron && !claimCronSlot(cfg.root, `${seenKey}:${key}`)) { deps.log?.(`[scheduler] automation ${a.id} slot taken — skipping`); continue; }
+        } catch {}
         deps.log?.(`[scheduler] firing automation ${a.id}`);
         const wf = { id: a.id, name: a.name, steps: a.steps };
         try {

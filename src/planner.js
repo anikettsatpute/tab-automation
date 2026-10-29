@@ -186,7 +186,7 @@ export async function handleRickMessage(cfg, deps, msg, text) {
   // an automation run is self-contained. Both show live progress in the dashboard.
   const generic = routeGenericPrompt(cfg, text);
   if (generic?.kind === "taskType" && !targetId) {
-    const { createTask, saveTaskSteps, getRun, updateTask } = await import("./db.js");
+    const { createTask, saveTaskSteps, getRun, updateTask, getTaskWithSteps } = await import("./db.js");
     const { runWorkflow } = await import("./workflow.js");
     const { loadJson } = await import("./setup-api.js");
     const doc = loadJson("config/streams.json", { taskTypes: [] });
@@ -205,10 +205,12 @@ export async function handleRickMessage(cfg, deps, msg, text) {
       }));
       saveTaskSteps(cfg.root, taskId, steps.map((s, i) => ({ step_id: s.id, type: s.type, agent: s.agent, model: "", status: "pending", prompt: s.prompt, output: "", position: i })));
       const wf = { id: `task-${taskId}`, name: `${type.name} ${taskId}`, trigger: { type: "manual" }, steps };
-      const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+      // Completion goes back as a REPLY to the user's message (threaded) with
+      // the final result — never a stray "Plan" pipeline. replyTo=null here so
+      // index.js's generic "✅ done" doesn't double-post; we post one summary.
       let runId = null, runStatus = "done", runErr = "";
       try {
-        const ctx = await deps.runWorkflow(wf, { kind: "discord-task", text, user: msg.author.tag, channelId: msg.channelId, taskId, taskType: type.id }, msg.channelId, replyTo);
+        const ctx = await deps.runWorkflow(wf, { kind: "discord-task", text, user: msg.author.tag, channelId: msg.channelId, taskId, taskType: type.id }, msg.channelId, null);
         runId = ctx._runId || null;
       } catch (e) { runStatus = "failed"; runErr = String(e.message || e).slice(0, 300); }
       if (!runId) {
@@ -233,6 +235,19 @@ export async function handleRickMessage(cfg, deps, msg, text) {
             const doneCount = synced.filter((s) => s.status === "done").length;
             updateTask(cfg.root, taskId, { status: runStatus === "done" ? "done" : "failed", progress: Math.round((doneCount / Math.max(1, synced.length)) * 100), blocked_reason: runStatus === "done" ? "" : runErr.slice(0, 500) });
           }
+        }
+      } catch {}
+      // One completion reply, threaded on the user's goal: result summary.
+      // This is the ONLY "done" message for a task (no Plan/Done pipeline).
+      try {
+        const d = getTaskWithSteps(cfg.root, taskId);
+        const doneSteps = (d?.steps || []).filter((s) => s.status === "done");
+        const lastOut = [...(d?.steps || [])].reverse().find((s) => s.output)?.output || "";
+        if (runStatus === "done") {
+          const summary = `✅ **${type.name}** done (${doneSteps.length}/${steps.length} steps).\n\n${String(lastOut).slice(0, 1500)}`;
+          for (const part of chunk(summary)) await msg.reply(part);
+        } else {
+          for (const part of chunk(`❌ **${type.name}** ${runStatus}: ${String(runErr || "step failed").slice(0, 500)}`)) await msg.reply(part);
         }
       } catch {}
       saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Launched task ${taskId} [${type.id}] -> run ${runId || "?"} (${runStatus})`.slice(0, 500), channelId: msg.channelId });
