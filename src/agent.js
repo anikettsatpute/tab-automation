@@ -258,6 +258,12 @@ export async function chatWithTools(cfg, agentId, userPrompt, { extraContext = "
   const agent = cfg.agents.get(agentId);
   if (!agent) throw new Error(`Unknown agent '${agentId}'`);
   const resolved = resolveProvider(cfg, agent);
+  // Muse provider has no HTTP endpoint — route simple chats through the CLI too.
+  if (resolved.type === "muse") {
+    const out = await dispatchViaMuse(cfg, { agent: agentId, base: agent, model: resolved.model, prompt: userPrompt, extraContext, toolCtx, jsonContract: false });
+    if (!out.ok) throw new Error(out.error || "muse chat failed");
+    return out.raw;
+  }
   const tools = allToolDefs(cfg, agent);
   const runId = toolCtx.runId || null;
   const tStart = Date.now();
