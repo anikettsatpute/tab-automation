@@ -367,6 +367,32 @@ test("SSE: authenticated same-origin client, single source, lifecycle", () => {
   assert.ok(readFileSync("dashboard-app/src/views/state.js", "utf8").includes("sseConnected"), "S.sseConnected exists");
 });
 
+test("diagrams tab: link artifacts render as clickable anchors (new tab, no opener)", () => {
+  const src = loopSrc.slice(loopSrc.indexOf("const mmd = "), loopSrc.indexOf("export function diagramFull")).replace(/export (const|function) /g, "$1 ");
+  const { diagramsTab, linkCard, isSafeLinkUrl } = new Function("diagramsList", "esc", "icon", "md", `${src}; return { diagramsTab, linkCard, isSafeLinkUrl };`)(
+    () => [], escHtml, () => "", (s) => escHtml(s)
+  );
+  // Only http(s) URLs become anchors.
+  assert.equal(isSafeLinkUrl("https://github.com/o/r/pull/1"), true);
+  assert.equal(isSafeLinkUrl("http://x/y"), true);
+  for (const bad of ["javascript:alert(1)", "data:text/html,<h1>x</h1>", "notaurl", "", null, undefined]) assert.equal(isSafeLinkUrl(bad), false, String(bad));
+  // Anchor shape + escaping.
+  const card = linkCard({ title: 'PR <1> & "fix"', body: "https://github.com/o/r/pull/1" });
+  assert.match(card, /<a href="https:\/\/github\.com\/o\/r\/pull\/1" target="_blank" rel="noopener">PR &lt;1&gt; &amp; &quot;fix&quot;<\/a>/);
+  assert.ok(!linkCard({ title: "x", body: "javascript:alert(1)" }).includes("<a "), "unsafe URL stays text");
+  assert.ok(!linkCard({ title: "", body: "" }).includes("<a "), "empty link stays text");
+  // Full tab: link artifact -> anchor; file artifact keeps the old card.
+  const html = diagramsTab({
+    steps: [], artifacts: [
+      { kind: "link", title: "PR #1", body: "https://github.com/o/r/pull/1", pos: 0, attempt: 1 },
+      { kind: "file", title: "notes", body: "hello", path: "a/b.md", pos: 0, attempt: 1 },
+    ],
+  });
+  assert.match(html, /<a href="https:\/\/github\.com\/o\/r\/pull\/1" target="_blank" rel="noopener">PR #1<\/a>/);
+  assert.ok(html.includes("Other artifacts"), "section kept");
+  assert.equal((html.match(/<a /g) || []).length, 1, "only the link artifact becomes an anchor");
+});
+
 test("config view: sectioned tabs, builders wired, dirty edits survive the tick", () => {
   const cfgSrc = readFileSync("dashboard-app/src/views/config.js", "utf8");
   const mainSrc = readFileSync("dashboard-app/src/main.js", "utf8");

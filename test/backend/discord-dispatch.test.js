@@ -130,3 +130,16 @@ test("discord inbound: queued job keeps link, brain stays running until worker c
   assert.equal(jp.channelId, "C777"); // completion delivery link
   assert.equal(jp.messageId, "M777");
 });
+
+test("firstLinkUrl: first link artifact URL, empty when absent", async () => {
+  const { firstLinkUrl } = await import("../../src/discord.js");
+  assert.equal(firstLinkUrl([]), "");
+  assert.equal(firstLinkUrl(null), "");
+  assert.equal(firstLinkUrl([{ kind: "diagram", body: "flowchart LR" }]), "");
+  assert.equal(firstLinkUrl([{ kind: "link", body: "  " }]), "");
+  assert.equal(firstLinkUrl([
+    { kind: "file", title: "n", path: "a.md" },
+    { kind: "link", title: "PR", body: " https://github.com/o/r/pull/7 " },
+    { kind: "link", title: "second", body: "https://example.com/2" },
+  ]), "https://github.com/o/r/pull/7");
+});

@@ -142,11 +142,22 @@ export function diagramsList(d) {
 }
 const mmd = (body) => `<div data-mermaid data-src="${esc(body)}"><div class="mmd-out" aria-busy="true"><p class="hint">Rendering diagram…</p></div></div>`;
 
+/** Link artifacts carry the URL in `body`. Only http(s) URLs become anchors. */
+export const isSafeLinkUrl = (u) => /^https?:\/\/\S+$/i.test(String(u || "").trim());
+
+/** A link-kind artifact as a real clickable anchor (new tab, no opener). */
+export function linkCard(a) {
+  const url = String(a?.body || "").trim();
+  const label = a?.title || url || "Link";
+  if (!isSafeLinkUrl(url)) return `<div class="dgcard"><b>${esc(label)}</b> <span class="kbd">link</span>${url ? `<div class="mdbox" style="margin-top:6px">${md(url)}</div>` : ""}</div>`;
+  return `<div class="dgcard"><b><a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a></b> <span class="kbd">link</span><div class="hint">${esc(url)}</div></div>`;
+}
+
 function diagramsTab(d) {
   const list = diagramsList(d);
   const files = d.artifacts.filter((a) => a.kind !== "diagram");
   return (list.map((g) => `<div class="dgcard"><div class="row"><b>${esc(g.title)}</b><span class="hint">${esc(g.meta)}</span><span class="spacer"></span><button type="button" class="btn sm ghost" data-dgopen="${esc(g.id)}">${icon("maximize-2")} Open</button></div>${mmd(g.body)}</div>`).join("") || `<p class="hint">No diagrams yet. Agents can emit <span class="kbd">artifacts[{kind:"diagram", body:"flowchart…"}]</span>.</p>`)
-    + (files.length ? `<div class="lsec-h">Other artifacts</div>${files.map((a) => `<div class="dgcard"><b>${esc(a.title)}</b> <span class="kbd">${esc(a.kind)}</span>${a.path ? ` <span class="hint">${esc(a.path)}</span>` : ""}${a.body ? `<div class="mdbox" style="margin-top:6px">${md(a.body)}</div>` : ""}</div>`).join("")}` : "");
+    + (files.length ? `<div class="lsec-h">Other artifacts</div>${files.map((a) => (a.kind === "link" ? linkCard(a) : `<div class="dgcard"><b>${esc(a.title)}</b> <span class="kbd">${esc(a.kind)}</span>${a.path ? ` <span class="hint">${esc(a.path)}</span>` : ""}${a.body ? `<div class="mdbox" style="margin-top:6px">${md(a.body)}</div>` : ""}</div>`)).join("")}` : "");
 }
 
 export function diagramFull(d) {

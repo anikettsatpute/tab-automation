@@ -81,6 +81,12 @@ function dbCommandCatalog(cfg) {
   } catch { return ""; }
 }
 
+/** First link-kind artifact URL ("" when absent). Pure — safe to unit test. */
+export function firstLinkUrl(artifacts) {
+  const a = (artifacts || []).find((x) => x && x.kind === "link" && String(x.body || "").trim());
+  return a ? String(a.body).trim() : "";
+}
+
 /** Loop pipelines filed from Discord (request.source = "discord:<channel>")
  *  report back to that channel when each task reaches a terminal state. */
 async function postLoopResult(cfg, send, ev) {
@@ -98,7 +104,9 @@ async function postLoopResult(cfg, send, ev) {
     ? String(last?.output || last?.summary || "(no output)")
     : String(task.blocked_reason || task.status_note || "see dashboard");
   const who = userId && userId !== "0" ? `<@${userId}> ` : "";
-  await send(channelId, `${who}${head} Pipeline **${task.task_type || "task"}** · task #${task.seq} ${ev.status} (${steps.map((s) => s.role).join(" → ")}):\n${body.slice(0, 1800)}`);
+  const link = firstLinkUrl(store.listArtifacts(cfg.root, task.id));
+  const linkLine = link ? `\n🔗 ${link}` : "";
+  await send(channelId, `${who}${head} Pipeline **${task.task_type || "task"}** · task #${task.seq} ${ev.status} (${steps.map((s) => s.role).join(" → ")}):\n${body.slice(0, 1800)}${linkLine}`);
   if (messageId && messageId !== "0") {
     try {
       const row = listBrainMessages(cfg.root, { limit: 100 }).find((b) => b.job_id === messageId);
