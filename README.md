@@ -39,6 +39,10 @@ node src/index.js                   # full run: Discord + scheduler
 `npm run setup` = `vite build` → `node src/setup-server.js` (Hono API + serves `dist-setup/` on :3000, auto-opens browser).
 Dev mode: `npm run setup:dev` (vite build --watch (rebuilds on save)) + `npm run setup` (Hono on :3000).
 
+## Coding with agents (dashboard → PR)
+
+Pick the `coding` task type in the dashboard (New task, Repo = this repo path). It runs `dash-coder` → `dash-tester` → `critic` → `dash-pr`: code lands on an isolated `agent/*` worktree branch (never main), tests run with evidence, then a PR opens against `main`. First connect GitHub once: Configuration → MCP servers → github card → Sign in with GitHub.
+
 ## Deploy to the Tab (Termux)
 
 Prereqs on the Tab: **Termux** (installed ✓), plus **Termux:Boot** from F-Droid for autostart. Enable Developer Mode in Discord app to copy channel IDs. In the Discord Developer Portal, enable the **Message Content Intent** (Bot -> Privileged Gateway Intents), otherwise the listener cannot read message text.
