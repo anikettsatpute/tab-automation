@@ -18,6 +18,7 @@
           "provider": { "type": "string", "description": "Provider id from config/providers.json (azure | openrouter | meta)." },
           "model": { "type": "string", "description": "Model/deployment name. Supports env:VAR_NAME. Omit = provider default." },
           "tools": { "type": "array", "items": { "type": "string" }, "description": "Tool allowlist, e.g. [\"web_search\",\"mcp:github:search\"]. Set in setup wizard only. Omit or [\"*\"] = all." },
+          "mcp": { "type": "array", "items": { "type": "string" }, "description": "MCP server ids this agent may use (granted in the dashboard MCP tab)." },
           "output": { "type": "string", "enum": ["text", "json"], "description": "Agent output mode for workflow steps." },
           "outputSchema": { "type": "object", "description": "Max 8 vars, values bool|int|string. Agent forced to emit only this JSON shape.", "maxProperties": 8 },
           "requiresApproval": { "type": "array", "items": { "type": "string" }, "description": "Tool names needing owner approval on Discord before running." },

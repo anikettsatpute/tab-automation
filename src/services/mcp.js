@@ -87,14 +87,21 @@ export function serverStatus(s) {
   for (const sl of s.secrets || []) { const k = secretKey(s.num, sl.slot); if (sl.required !== false && !envVal(k) && !missing.includes(k)) missing.push(k); }
   const oauthy = !!(s.oauth || oauthPreset(s));
   if (oauthy && !envVal(secretKey(s.num, "ACCESS_TOKEN")) && !missing.includes(secretKey(s.num, "ACCESS_TOKEN"))) missing.push(secretKey(s.num, "ACCESS_TOKEN"));
-  if (missing.length) return { status: oauthy ? "needs-auth" : "needs-secret", missing };
+  const github = isGithubServer(s);
+  if (missing.length) return { status: oauthy || github ? "needs-auth" : "needs-secret", missing };
   if (s.authStatus === "needed") return { status: "needs-auth", missing: [], hint: s.authHint || "" };
   if (s.authStatus === "error") return { status: "error", missing: [], hint: s.authHint || "" };
   return { status: "ready", missing: [] };
 }
 
-/** How this server signs in: discover (http), provider preset, or custom endpoints. */
+export function isGithubServer(s) {
+  if (s.transport === "http") { try { return /(^|\.)githubcopilot\.com$|(^|\.)github\.com$/.test(new URL(s.url).hostname); } catch { return false; } }
+  return (s.args || []).some((a) => /server-github|github-mcp-server/.test(String(a))) || /github-mcp-server/.test(String(s.command || ""));
+}
+
+/** How this server signs in: github (gh device flow), discover (http), provider preset, or custom endpoints. */
 export function signInInfo(s) {
+  if (isGithubServer(s)) return { kind: "github", provider: "github", label: "GitHub", suggested: true, clientSet: true };
   const preset = oauthPreset(s);
   const provider = s.oauth?.provider || preset?.provider || "";
   const p = OAUTH_PROVIDERS[provider];

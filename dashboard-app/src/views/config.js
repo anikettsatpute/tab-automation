@@ -160,8 +160,26 @@ function mcpForm(ed, nextNum) {
 
 const redirectUri = () => `${location.origin}/api/control/mcp/oauth/callback`;
 
+function githubBlock(s) {
+  const id = esc(s.id);
+  const g = S.ghLogin?.[s.id] || {};
+  const tokenSet = (s.secrets || []).some((k) => k.slot === "TOKEN" && k.set);
+  const pending = g.status === "pending" && g.code;
+  return `<div class="appr" role="group" aria-label="GitHub sign-in for ${id}">
+    <div class="row">${icon("git-branch")} <b>Sign in with GitHub</b>
+      <span class="tag ${tokenSet ? "ok" : "warn"}">${tokenSet ? "connected" : "not connected"}</span>${g.user ? `<span class="hint">as ${esc(g.user)}</span>` : ""}
+      <span class="spacer"></span>
+      ${pending ? `<button type="button" class="btn sm ghost" data-ghcancel="${id}">Cancel</button>` : ""}
+      <button type="button" class="btn sm ${tokenSet ? "" : "primary"}" data-ghlogin="${id}" ${pending ? "disabled" : ""}>${icon("key-round")} ${tokenSet ? "Reconnect" : "Sign in with GitHub"}</button></div>
+    ${pending ? `<p aria-live="polite">Enter code <span class="kbd" style="font-size:1.2em">${esc(g.code)}</span> <button type="button" class="btn sm ghost" data-copy="${esc(g.code)}">Copy</button>
+      at <a href="${esc(g.url)}" target="_blank" rel="noopener noreferrer">${esc(g.url)}</a>, then approve. ${icon("loader")} Waiting…</p>` : ""}
+    ${g.status === "error" ? `<div class="notice bad" role="alert">${icon("alert-triangle")} ${esc(g.error)}</div>` : ""}
+    <p class="hint">No PAT needed: uses the GitHub CLI device login, saves its token to <span class="kbd">MCP_${s.num}_TOKEN</span>, and sets up <span class="kbd">git push</span>. Already logged in with <span class="kbd">gh</span>? It's one click.</p></div>`;
+}
+
 function signInBlock(s) {
   const si = s.signIn || {};
+  if (si.kind === "github") return githubBlock(s);
   const o = s.oauth;
   const id = esc(s.id);
   const waiting = S.mcpAuthWait === s.id;

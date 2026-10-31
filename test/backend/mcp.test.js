@@ -207,6 +207,43 @@ test("routes: add, secrets (write-only), grant, test, delete", async () => {
   assert.equal(readTools(root).mcpNextNum, 3, "num not reused");
 });
 
+test("github server: detected, needs-auth without token, gh login routes", async () => {
+  const { isGithubServer, signInInfo } = await import("../../src/services/mcp.js");
+  const { startGithubLogin, publicLogin, cancelGithubLogin } = await import("../../src/services/github-login.js");
+  assert.equal(isGithubServer({ transport: "http", url: "https://api.githubcopilot.com/mcp/" }), true);
+  assert.equal(isGithubServer({ transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] }), true);
+  assert.equal(isGithubServer({ transport: "stdio", command: "npx", args: ["-y", "other"] }), false);
+  assert.equal(signInInfo({ id: "github", transport: "http", url: "https://api.githubcopilot.com/mcp/" }).kind, "github");
+  assert.equal(serverStatus({ id: "github", num: 4, transport: "http", url: "https://api.githubcopilot.com/mcp/", headers: { Authorization: "Bearer ${MCP_4_TOKEN}" }, secrets: [{ slot: "TOKEN" }] }).status, "needs-auth");
+
+  // gh missing -> login route reports the error instead of hanging.
+  const doc = readTools(root);
+  doc.servers.push({ id: "github", num: 4, transport: "http", url: "https://api.githubcopilot.com/mcp/", headers: { Authorization: "Bearer ${MCP_4_TOKEN}" }, secrets: [{ slot: "TOKEN" }] });
+  writeFileSync(join(root, "config", "tools.json"), JSON.stringify(doc));
+  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
+  const prevGhBin = process.env.GH_BIN;
+  process.env.GH_BIN = join(root, "no-such-gh");
+  let r = await call(app, "/api/control/mcp-github-login?id=github", { method: "POST", body: {} });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.login.status, "error");
+  assert.match(r.data.login.error, /not installed|not runnable|ENOENT/);
+  r = await call(app, "/api/control/mcp-github-login?id=github");
+  assert.equal(r.data.login.status, "error");
+  r = await call(app, "/api/control/mcp-github-login?id=github", { method: "DELETE" });
+  assert.equal(r.status, 200);
+  assert.equal(publicLogin("github").status, "idle");
+  if (prevGhBin === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = prevGhBin;
+  cancelGithubLogin("github");
+
+  // Non-github server is rejected by the login route.
+  r = await call(app, "/api/control/mcp-github-login?id=nonexistent", { method: "POST", body: {} });
+  assert.equal(r.status, 400); // unknown server
+  r = await call(app, "/api/control/mcp-github-login?id=fs", { method: "POST", body: {} });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /not a GitHub MCP server/);
+  void startGithubLogin;
+});
+
 test("dashboard sign-in: Google preset for stdio gmail-mcp, callback, sign-out", async () => {
   const doc = readTools(root);
   doc.servers.push({ id: "gmail", transport: "stdio", command: "npx", args: ["-y", "gmail-mcp"] });

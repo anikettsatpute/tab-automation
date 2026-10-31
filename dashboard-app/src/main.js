@@ -321,6 +321,34 @@ function wireConfig() {
       else fail(`Sign-in failed: ${e.message}`);
     }
   }));
+  $$("[data-ghlogin]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.ghlogin;
+    const url = `${MCP}-github-login?id=${encodeURIComponent(id)}`;
+    const set = (login) => { S.ghLogin = { ...(S.ghLogin || {}), [id]: login }; render(); };
+    b.disabled = true;
+    try {
+      let { login } = await api(url, { method: "POST", body: "{}" }, { timeoutMs: 30000 });
+      set(login);
+      const until = Date.now() + 15 * 60000;
+      while (login.status === "pending" && Date.now() < until && S.ghLogin?.[id]) {
+        await new Promise((r) => setTimeout(r, 3000));
+        ({ login } = await api(url));
+        if (S.ghLogin?.[id]) set(login);
+      }
+      if (login.status !== "done") return;
+      S.mcp = await api(MCP).catch(() => S.mcp);
+      cfgNotice(`GitHub connected${login.user ? ` as ${login.user}` : ""} — testing…`); render();
+      const t = await api(`${MCP}/${encodeURIComponent(id)}/test`, { method: "POST", body: "{}" }, { timeoutMs: 90000 });
+      if (t.servers) S.mcp = { ...S.mcp, ...t };
+      cfgNotice(t.test?.ok ? `${id}: ${t.test.tools.length} tools ready.` : `${id} connected, but test failed: ${t.test?.hint || "unknown"}`, !t.test?.ok);
+      render();
+    } catch (e) { set({ status: "error", error: e.message }); }
+  }));
+  $$("[data-ghcancel]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.ghcancel;
+    await api(`${MCP}-github-login?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+    const { [id]: _, ...rest } = S.ghLogin || {}; S.ghLogin = rest; render();
+  }));
   $$("[data-copy]").forEach((b) => (b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { prompt("Copy this:", b.dataset.copy); }
   }));

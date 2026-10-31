@@ -29,7 +29,7 @@
         "get_file_info",
         "list_allowed_directories"
       ],
-      "lastTestedAt": "2026-10-31T14:36:09.697Z"
+      "lastTestedAt": "2026-10-31T14:39:29.991Z"
     },
     {
       "id": "reddit",
@@ -39,7 +39,17 @@
         "-y",
         "reddit-mcp-buddy"
       ],
-      "num": 2
+      "num": 2,
+      "authStatus": "ok",
+      "authHint": "",
+      "tools": [
+        "browse_subreddit",
+        "search_reddit",
+        "get_post_details",
+        "user_analysis",
+        "reddit_explain"
+      ],
+      "lastTestedAt": "2026-10-31T14:39:26.034Z"
     },
     {
       "id": "gmail",
@@ -50,9 +60,25 @@
         "gmail-mcp"
       ],
       "note": "Gmail: read, send, labels, drafts (37 tools). Sign in needed.",
-      "authStatus": "needed",
-      "authHint": "Added, but sign-in needed before it can fetch your Gmail. Click Sign in on its card.",
-      "num": 3
+      "authStatus": "error",
+      "authHint": "exited (1): gmail-mcp: GOOGLE_ACCESS_TOKEN required for stdio transport\nFor OAuth support, use HTTP transport: MCP_TRANSPORT=http\n",
+      "num": 3,
+      "tools": [],
+      "lastTestedAt": "2026-10-31T14:39:19.879Z"
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${MCP_4_TOKEN}"
+      },
+      "secrets": [
+        { "slot": "TOKEN", "label": "GitHub fine-grained PAT (Contents + Pull requests: read/write on the repo)" }
+      ],
+      "note": "GitHub remote MCP: branches, files, PRs, issues. Used by dash-coder/dash-pr.",
+      "num": 4
     }
   ],
   "customTools": [
@@ -88,5 +114,5 @@
       "approvalRequired": true
     }
   ],
-  "mcpNextNum": 3
+  "mcpNextNum": 4
 }

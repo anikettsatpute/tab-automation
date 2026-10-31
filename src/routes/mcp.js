@@ -6,8 +6,9 @@ import { atomicWrite } from "../loop/workspace.js";
 import { writeEnv, validateEnvValue } from "../services/envfile.js";
 import {
   MCP_ID_RE, SLOT_RE, readTools, writeTools, listServers, publicServer, secretKey,
-  serverRefs, refAllowed, probeServer, saveTokens, ensureFreshToken, signInInfo, OAUTH_PROVIDERS,
+  serverRefs, refAllowed, probeServer, saveTokens, ensureFreshToken, signInInfo, OAUTH_PROVIDERS, isGithubServer,
 } from "../services/mcp.js";
+import { startGithubLogin, publicLogin, cancelGithubLogin } from "../services/github-login.js";
 
 const OAUTH_SLOTS = new Set(["ACCESS_TOKEN", "REFRESH_TOKEN", "EXPIRES_AT", "CLIENT_ID", "CLIENT_SECRET"]);
 const LITERAL_SECRET_RE = /^(Bearer|Basic|token)\s+[^$]|^(sk-|ghp_|gho_|github_pat_|xox[baprs]-|AIza|eyJ)/i;
@@ -314,6 +315,36 @@ export function registerMcpRoutes(app, ctx) {
       await audit(c, "mcp.oauth.done", s.id, t.refresh_token ? "with refresh" : "no refresh");
       return page("Signed in", `${esc(s.name || s.id)} is connected. Token saved as <code>${secretKey(s.num, "ACCESS_TOKEN")}</code>${t.refresh_token ? " (auto-refresh on)" : ""}. You can close this tab.`);
     } catch (e) { recordError(e.message); return page("Sign-in failed", esc(String(e.message).slice(0, 300)), 502); }
+  });
+
+  // GitHub: sign in through the gh CLI device flow and store its token in the TOKEN slot.
+  const saveGithubToken = (id) => (token) => {
+    const { doc, s } = find(id);
+    if (!s) throw new Error("server removed");
+    if (!(s.secrets || []).some((x) => x.slot === "TOKEN")) s.secrets = [...(s.secrets || []), { slot: "TOKEN", label: "GitHub token (from gh sign-in)" }];
+    const ref = `\${${secretKey(s.num, "TOKEN")}}`;
+    if (s.transport === "http") s.headers = { ...(s.headers || {}), Authorization: `Bearer ${ref}` };
+    else s.env = { ...(s.env || {}), GITHUB_PERSONAL_ACCESS_TOKEN: ref };
+    delete s.authStatus; s.authHint = "";
+    writeTools(root, doc);
+    writeEnv(root, { [secretKey(s.num, "TOKEN")]: token });
+  };
+  // NOTE: Hono matches /:id routes in registration order, so a server literally
+  // named "github" would shadow /:id/github/login. Fixed path avoids the clash.
+  app.post("/api/control/mcp-github-login", async (c) => {
+    const denied = await guard(c); if (denied) return denied;
+    const id = String(c.req.query("id") || "");
+    const { s } = id ? find(id) : { s: null };
+    if (!s || !isGithubServer(s)) return c.json({ error: "not a GitHub MCP server" }, 400);
+    const login = await startGithubLogin(s.id, saveGithubToken(s.id));
+    await audit(c, "mcp.github.login", s.id, login.status);
+    return c.json({ ok: login.status !== "error", login });
+  });
+  app.get("/api/control/mcp-github-login", (c) => c.json({ ok: true, login: publicLogin(String(c.req.query("id") || "")) }));
+  app.delete("/api/control/mcp-github-login", async (c) => {
+    const denied = await guard(c); if (denied) return denied;
+    cancelGithubLogin(String(c.req.query("id") || ""));
+    return c.json({ ok: true });
   });
 
   app.post("/api/control/mcp/:id/oauth/refresh", async (c) => {
