@@ -90,7 +90,7 @@ SSE auth must account for EventSource being unable to set bearer headers: use sa
 
 Assumptions: no live production inspection has been performed for this plan; all npm choices in §5 are unverified until the spike passes.
 
-- Static/build: `npm run validate` clean; `npm run dashboard:build` clean, plus `build:all` when setup is affected.
+- Static/build: `npm run validate` clean; `npm run dashboard:build` clean.
 - Backend tests on Node 22: focused API/jobs/requeue coverage, transient-retry vs deliberate-requeue budgets, exactly-once side-effect safety (no duplicate notifies), cancel/recovery, and schema/validation tests with `node:test` or Vitest.
 - Migrations: tested on a consistent SQLite backup (never a raw copy of the live file); data directory preserved.
 - Frontend: Playwright screenshots at desktop/tablet/mobile plus axe, keyboard reachability, and offline-asset (CDN-blocked) checks.

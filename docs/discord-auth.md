@@ -2,7 +2,7 @@
 
 ## Default (ships now): bot token + channel picker
 
-1. `npm run setup` step 4/6 asks for the bot token.
+1. Dashboard Config → Discord tab asks for the bot token.
 2. Wizard calls `GET /users/@me` (identity), `GET /users/@me/guilds`,
    `GET /guilds/{id}/channels` and lets the installer pick ONE main channel
    + optional extras + owner user id.

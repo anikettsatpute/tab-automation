@@ -13,13 +13,9 @@
     "validate": "node src/validate.js",
     "test": "node --test test/backend/*.test.js test/frontend*.test.js",
     "list": "node src/index.js --list",
-    "setup": "npm run build:all && node src/setup-server.js",
-    "setup:build": "vite build",
-    "setup:dev": "vite build --watch",
-    "setup:server": "node src/setup-server.js",
     "dashboard:build": "vite build --config vite.dashboard.config.js",
     "dashboard:dev": "vite build --config vite.dashboard.config.js --watch",
-    "build:all": "npm run setup:build && npm run dashboard:build"
+    "prestart": "node scripts/ensure-dashboard.js"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",

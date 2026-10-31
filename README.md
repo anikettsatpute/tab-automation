@@ -30,14 +30,13 @@ Always-on Discord agent + scheduled workflow automation. Built fresh (Harness wa
 ```sh
 cd tab-automation
 npm install
-npm run setup    # builds the Vite setup UI, opens it in your browser
+npm start        # builds dashboard if missing, then Discord + scheduler + Control Room
 node src/index.js --list
 node src/index.js --run ping-test   # manual workflow smoke test (no Discord login)
-node src/index.js                   # full run: Discord + scheduler
 ```
 
-`npm run setup` = `vite build` → `node src/setup-server.js` (Hono API + serves `dist-setup/` on :3000, auto-opens browser).
-Dev mode: `npm run setup:dev` (vite build --watch (rebuilds on save)) + `npm run setup` (Hono on :3000).
+`npm start` = `node src/index.js` (Discord + scheduler + Control Room at `/dashboard`).
+Dashboard UI source is `dashboard-app/`; build with `npm run dashboard:build` (output `dist-dashboard/`, gitignored).
 
 ## Coding with agents (dashboard → PR)
 

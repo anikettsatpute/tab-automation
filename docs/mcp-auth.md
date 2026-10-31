@@ -8,7 +8,7 @@ at setup time so they never block at runtime.
 1. Tokens live in `.env` (or the OS keyring), never in `config/tools.json`.
    `tools.json` stores only `{id, transport, command/args/url, tokenEnv}`.
    OAuth servers additionally store `{refreshEnv, tokenEndpoint, oauthClientIdEnv}`.
-2. `npm run setup` step 3/6 runs an auth probe per server:
+2. Dashboard Config → MCP servers tab runs an auth probe per server:
    - stdio: spawn server, call `tools/list`, expect a tool list within 20s.
    - http: OAuth-aware probe (`probeMcpHttp` in `src/oauth.js`) — bearer token
      from `tokenEnv` when set, else unauthenticated. On 401/403 it runs

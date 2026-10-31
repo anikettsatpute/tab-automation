@@ -4,4 +4,5 @@ data/
 *.log
 .next/
 dist-setup/
+dist-dashboard/
 data/tablet-tab-automation.db

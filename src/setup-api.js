@@ -1,5 +1,5 @@
-// Shared setup logic: pure read/write/test helpers for the UX setup wizard
-// (src/setup-server.js + setup-app/). No readline here.
+// Shared config helpers: pure read/write/test helpers used by routes + services.
+// No readline here.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
