@@ -286,7 +286,8 @@ export function registerRequestRoutes(app, ctx) {
   app.get("/api/control/brain/:id/session", async (c) => {
     try {
       const row = listBrainMessages(root, { limit: 500 }).find((m) => m.id === c.req.param("id"));
-      if (!row) return c.json({ error: "not found" }, 404);
+      // Legacy memory-backed rows (m0, m1…) have no stored session.
+      if (!row) return c.json({ ok: true, router: null, prompt: null, chat: null, tasks: [], requestId: null });
       const { routerDir } = await import("../router.js");
       const { parseTranscript } = await import("../loop/transcript.js");
       const { readFileSync, existsSync } = await import("node:fs");
