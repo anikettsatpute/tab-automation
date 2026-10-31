@@ -417,7 +417,9 @@ async function runAutomationJob(cfg, deps, dbx, db, jobs, job, payload, cancelCh
   const executeAgentStep = bindWorkflowAgentExecutor(cfg, dbx, db, jobs, job, {
     attempt: Number(job.attempt || 0) + 1, cancelCheck,
   });
-  const trigger = { kind: "dashboard-flow", automation: automationId, jobId: job.id, text: wf.name || wf.id };
+  // Discord-command flows carry the user's text after the !command; expose it
+  // as {{trigger.text}} (fallback: flow name for dashboard/scheduled runs).
+  const trigger = { kind: payload.source === "discord" ? "discord" : "dashboard-flow", automation: automationId, jobId: job.id, text: String(payload.text || "").trim() || wf.name || wf.id, user: payload.user || "", command: payload.command || null, channelId: payload.channelId || null };
   try {
     const wdeps = { ...(deps || {}), sendDiscord };
     const wctx = await runWorkflow(cfg, wdeps, { id: wf.id, steps: wf.steps || [] }, trigger, {

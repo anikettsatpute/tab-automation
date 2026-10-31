@@ -10,6 +10,35 @@
         { "role": "critic", "goal": "Review the deliverable against the end goal. Fix small issues directly; report anything unresolved." },
         { "role": "writer", "goal": "Write the final user-facing summary of what was done and where the outputs are." }
       ]
+    },
+    {
+      "id": "quick-answer",
+      "name": "Quick answer",
+      "description": "Demo: analyst works out the answer, writer turns it into a Discord-ready post.",
+      "steps": [
+        { "role": "analyst", "goal": "Answer the question accurately and concisely with key facts and caveats." },
+        { "role": "writer", "goal": "Turn the analyst's answer into a short Discord-ready post." }
+      ]
+    },
+    {
+      "id": "explain-and-review",
+      "name": "Explain and review",
+      "description": "Demo: explainer drafts, critic checks accuracy, writer publishes.",
+      "steps": [
+        { "role": "explainer", "goal": "Explain the topic simply in under 120 words." },
+        { "role": "critic", "goal": "Check the explanation for errors or misleading simplifications and fix them." },
+        { "role": "writer", "goal": "Publish the corrected explanation as a short Discord post." }
+      ]
+    },
+    {
+      "id": "code-fix",
+      "name": "Code fix (test-first)",
+      "description": "Demo: tester reproduces, coder fixes, tester verifies.",
+      "steps": [
+        { "role": "tester", "goal": "Reproduce the reported problem and write a failing test case that captures it." },
+        { "role": "coder", "goal": "Fix the problem with the smallest correct change so the failing test passes." },
+        { "role": "tester", "goal": "Re-run the tests and report PASS/FAIL with evidence." }
+      ]
     }
   ]
 }

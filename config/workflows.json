@@ -361,6 +361,44 @@
           ]
         }
       ]
+    },
+    {
+      "id": "demo-haiku",
+      "name": "Demo: haiku",
+      "description": "!haiku <topic> — one agent writes a haiku and replies in the channel.",
+      "trigger": { "type": "discord", "command": "haiku" },
+      "steps": [
+        { "id": "poem", "type": "agent", "agent": "haiku-poet", "prompt": "{{trigger.text}}" }
+      ]
+    },
+    {
+      "id": "demo-explain",
+      "name": "Demo: explain + review",
+      "description": "!explain <topic> — explainer drafts, critic fact-checks and returns the corrected version.",
+      "trigger": { "type": "discord", "command": "explain" },
+      "steps": [
+        { "id": "draft", "type": "agent", "agent": "explainer", "prompt": "{{trigger.text}}" },
+        { "id": "review", "type": "agent", "agent": "critic", "prompt": "Fact-check this explanation of \"{{trigger.text}}\". Reply with ONLY the corrected explanation (under 140 words), then one line 'Changes: …' listing fixes or 'none'.\n\n{{steps.draft}}" }
+      ]
+    },
+    {
+      "id": "demo-standup",
+      "name": "Demo: standup",
+      "description": "!standup <notes> — turns raw notes into Yesterday / Today / Blockers.",
+      "trigger": { "type": "discord", "command": "standup" },
+      "steps": [
+        { "id": "standup", "type": "agent", "agent": "standup-summarizer", "prompt": "{{trigger.text}}" }
+      ]
+    },
+    {
+      "id": "demo-release-notes",
+      "name": "Demo: release notes",
+      "description": "Manual or !relnotes <changes> — release-notes agent, then writer polishes for the channel.",
+      "trigger": { "type": "discord", "command": "relnotes" },
+      "steps": [
+        { "id": "notes", "type": "agent", "agent": "release-notes", "prompt": "{{trigger.text}}" },
+        { "id": "post", "type": "agent", "agent": "writer", "prompt": "Turn these release notes into a Discord announcement:\n\n{{steps.notes}}" }
+      ]
     }
   ]
 }

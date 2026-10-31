@@ -366,3 +366,13 @@ test("SSE: authenticated same-origin client, single source, lifecycle", () => {
   assert.ok(readFileSync("dashboard-app/src/views/state.js", "utf8").includes("feedVersion"), "S.feedVersion exists");
   assert.ok(readFileSync("dashboard-app/src/views/state.js", "utf8").includes("sseConnected"), "S.sseConnected exists");
 });
+
+test("config view: sectioned tabs, builders wired, dirty edits survive the tick", () => {
+  const cfgSrc = readFileSync("dashboard-app/src/views/config.js", "utf8");
+  const mainSrc = readFileSync("dashboard-app/src/main.js", "utf8");
+  for (const t of ["providers", "discord", "agents", "pipelines", "automations"]) assert.ok(cfgSrc.includes(`["${t}",`), `tab ${t}`);
+  for (const id of ["#cfg-addprov", "#cfg-addagent", "#dc-save", "#pp-save", "#ab-save", "[data-cfgtab]", "[data-pprun]"]) assert.ok(mainSrc.includes(id), `wired ${id}`);
+  assert.ok(mainSrc.includes("S.cfgDirty && S.cfgData"), "tick keeps unsaved edits");
+  assert.ok(mainSrc.includes("delete providers.keyStatus"), "derived keyStatus never saved");
+  assert.ok(!readFileSync("dashboard-app/src/views/panels.js", "utf8").includes("export function configView"), "old view removed");
+});

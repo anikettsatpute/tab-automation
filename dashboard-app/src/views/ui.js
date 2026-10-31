@@ -15,6 +15,7 @@ import {
   Rss, Save, ScrollText, Search, Send, Server, Settings2, ShieldCheck, Siren,
   SunMoon, Terminal, Timer, Trash2, Waves, WifiOff, Workflow, Wrench, X,
   XCircle, Zap, User, Pencil, FilePlus, Globe, ChevronsUpDown,
+  MessageCircle, ChevronDown, ArrowUp, Info, TriangleAlert,
 } from "lucide";
 
 // Named map only — never import the full `icons` registry (2000+ entries).
@@ -38,6 +39,8 @@ const NODES = {
   waves: Waves, "wifi-off": WifiOff, workflow: Workflow, wrench: Wrench, x: X,
   "x-circle": XCircle, zap: Zap, user: User, pencil: Pencil, "file-plus": FilePlus,
   globe: Globe, "chevrons-up-down": ChevronsUpDown,
+  "message-circle": MessageCircle, "chevron-down": ChevronDown, "arrow-up": ArrowUp,
+  info: Info, "alert-triangle": TriangleAlert,
 };
 
 const SVG_ATTRS = {

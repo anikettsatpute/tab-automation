@@ -2,7 +2,8 @@ import { Client, GatewayIntentBits, Events } from "discord.js";
 import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.js";
 import { handleRickMessage, workflowCatalog } from "./planner.js";
-import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutboxDeduped } from "./db.js";
+import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutboxDeduped, listAutomations } from "./db.js";
+import { onLoopEvent } from "./loop/engine.js";
 
 // Durable Discord enqueue args: preserves configured workflow agents/prompts
 // (automation kind runs the real steps; ephemeral pipelines run as request
@@ -59,6 +60,43 @@ export function buildDiscordJobArgs(wf, trigger, cfg) {
     idempotencyKey = `discord:${triggerKind}:${wf?.id}:hash-${h.toString(36)}`;
   }
   return { kind, payload, idempotencyKey };
+}
+
+/** Discord-command automation lookup: dashboard-created flows (DB, enabled)
+ *  win over config/workflows.json so new automations work without a restart. */
+export function findDiscordAutomation(cfg, cmd) {
+  try {
+    const a = listAutomations(cfg.root).find((x) => x.enabled && x.trigger_type === "discord" && x.trigger_config?.command === cmd);
+    if (a) return { id: a.id, name: a.name, trigger: { type: "discord", command: cmd }, steps: a.steps };
+  } catch { /* DB optional */ }
+  return (cfg.workflows || []).find((w) => w.trigger?.type === "discord" && w.trigger?.command === cmd && w.enabled !== false) || null;
+}
+
+/** Discord commands that exist only in the DB (created from the dashboard). */
+function dbCommandCatalog(cfg) {
+  try {
+    const fileIds = new Set((cfg.workflows || []).map((w) => w.id));
+    const extra = listAutomations(cfg.root).filter((a) => a.enabled && a.trigger_type === "discord" && a.trigger_config?.command && !fileIds.has(a.id));
+    return extra.length ? "\n" + extra.map((a) => `- ${a.id} [!${a.trigger_config.command}] :: ${(a.steps || []).map((s) => `${s.id}:${s.type}`).join(" -> ")}${a.description ? ` — ${a.description}` : ""}`).join("\n") : "";
+  } catch { return ""; }
+}
+
+/** Loop pipelines filed from Discord (request.source = "discord:<channel>")
+ *  report back to that channel when each task reaches a terminal state. */
+async function postLoopResult(cfg, send, ev) {
+  if (ev?.type !== "task" || !["done", "failed", "blocked"].includes(ev.status)) return;
+  const store = await import("./loop/store.js");
+  const task = store.getTask(cfg.root, ev.taskId);
+  const req = task?.request_id ? store.getRequest(cfg.root, task.request_id) : null;
+  const m = /^discord:(\d{5,25})$/.exec(req?.source || "");
+  if (!m) return;
+  const steps = store.listSteps(cfg.root, task.id);
+  const last = [...steps].reverse().find((s) => s.status === "done" && (s.output || s.summary));
+  const head = ev.status === "done" ? "✅" : ev.status === "blocked" ? "⛔" : "❌";
+  const body = ev.status === "done"
+    ? String(last?.output || last?.summary || "(no output)")
+    : String(task.blocked_reason || task.status_note || "see dashboard");
+  await send(m[1], `${head} Pipeline **${task.task_type || "task"}** · task #${task.seq} ${ev.status} (${steps.map((s) => s.role).join(" → ")}):\n${body.slice(0, 1800)}`);
 }
 
 export function startDiscord(cfg, deps) {
@@ -191,24 +229,46 @@ export function startDiscord(cfg, deps) {
           return;
         }
         if (cmd === "automations" || cmd === "workflows" || cmd === "list") {
-          const reply = `⚙️ Automations (say "run <id>" or \`!<command>\`):\n${workflowCatalog(cfg)}`;
+          const reply = `⚙️ Automations (say "run <id>" or \`!<command>\`):\n${workflowCatalog(cfg)}${dbCommandCatalog(cfg)}`;
           for (const part of chunk(reply)) await msg.reply(part);
           return;
         }
-        const wf = cfg.workflows.find(
-          (w) => w.trigger?.type === "discord" && w.trigger?.command === cmd
-        );
+        if (cmd === "pipelines") {
+          const { loadTaskTypes } = await import("./loop/task-types.js");
+          const list = loadTaskTypes(cfg.root);
+          const reply = list.length
+            ? `🧬 Agent pipelines (say \`!pipeline <id> <goal>\`):\n${list.map((t) => `- **${t.id}** — ${t.steps.map((s) => s.role).join(" → ")}${t.description ? ` · ${t.description}` : ""}`).join("\n")}`
+            : "No pipelines configured — add one in Control Room → Configuration → Pipelines.";
+          for (const part of chunk(reply)) await msg.reply(part);
+          return;
+        }
+        if (cmd === "pipeline") {
+          const [typeId, ...goal] = rest;
+          const { loadTaskTypes } = await import("./loop/task-types.js");
+          const tt = loadTaskTypes(cfg.root).find((t) => t.id === typeId);
+          if (!tt || !goal.length) {
+            await msg.reply(`Usage: \`!pipeline <id> <goal>\`. ${tt ? "" : `Unknown pipeline \`${typeId || ""}\`. `}Try \`!pipelines\`.`);
+            return;
+          }
+          const store = await import("./loop/store.js");
+          const requestId = store.createRequest(cfg.root, { text: goal.join(" "), mode: "direct", source: `discord:${msg.channelId}`, taskType: tt.id, dispatcher: "muse" });
+          await msg.reply(`🧬 Pipeline **${tt.id}** (${tt.steps.map((s) => s.role).join(" → ")}) queued as request \`${requestId}\` — the final output posts here when the last agent finishes.`);
+          return;
+        }
+        const wf = findDiscordAutomation(cfg, cmd);
         if (wf) {
           // Durable enqueue: worker is the sole executor; reply is the ack.
+          // kind=automation so the flow's real steps run with {{trigger.text}}.
           await msg.channel.sendTyping().catch(() => {});
           const { enqueueJobSync } = await import("./db.js");
-          const { id: jobId } = enqueueJobSync(cfg.root, { kind: "chat", payload: { text: rest.join(" "), workflow: wf.id, channelId: msg.channelId, messageId: msg.id }, idempotencyKey: `discord:cmd:${cmd}:${msg.id}` });
+          const { kind, payload, idempotencyKey } = buildDiscordJobArgs(wf, { kind: "discord", automation: wf.id, command: cmd, text: rest.join(" "), user: msg.author?.tag || "", channelId: msg.channelId, messageId: msg.id }, cfg);
+          const { id: jobId } = enqueueJobSync(cfg.root, { kind, payload, idempotencyKey });
           await msg.reply(`⏳ **${wf.id}** queued as job \`${jobId}\` — results post here when done.`);
           return;
         }
         // Unknown !command: don't silently ignore — show what's actually available
         {
-          const reply = `❓ Unknown command \`!${cmd}\`.\n\n⚙️ Automations:\n${workflowCatalog(cfg)}\n\nBuilt-ins: !remember !recall !memory !history !run <id> !automations`;
+          const reply = `❓ Unknown command \`!${cmd}\`.\n\n⚙️ Automations:\n${workflowCatalog(cfg)}${dbCommandCatalog(cfg)}\n\nBuilt-ins: !remember !recall !memory !history !run <id> !automations !pipelines !pipeline <id> <goal>`;
           for (const part of chunk(reply)) await msg.reply(part);
           return;
         }
@@ -284,6 +344,8 @@ export function startDiscord(cfg, deps) {
     if (!channel?.isSendable()) throw new Error(`Channel ${channelId} is not sendable`);
     for (const part of chunk(message)) await channel.send(part);
   };
+onLoopEvent((ev) => { postLoopResult(cfg, sendDiscord, ev).catch((e) => deps.log?.(`[discord] pipeline report failed: ${e.message}`)); });
 
+  
   return { client, sendDiscord };
 }

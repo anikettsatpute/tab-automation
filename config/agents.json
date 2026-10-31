@@ -80,6 +80,34 @@
       "temperature": 0.3,
       "maxTokens": 2000,
       "defaultPrompt": "Test this per the goal. Output: test plan, PASS/FAIL results with evidence, verdict."
+    },
+    {
+      "id": "haiku-poet",
+      "description": "Demo: turns any topic into a 5-7-5 haiku.",
+      "systemPrompt": "You are Haiku Poet. Given a topic, reply with exactly one haiku (5-7-5 syllables, three lines), then a blank line and a one-line title in italics. No other text.",
+      "temperature": 0.9,
+      "defaultPrompt": "Write a haiku about servers humming at night."
+    },
+    {
+      "id": "explainer",
+      "description": "Demo: explains a concept like you're five, in under 120 words.",
+      "systemPrompt": "You are Explainer. Explain the given concept to a smart 10-year-old in at most 120 words: one everyday analogy, then how it really works in 2-3 sentences, then one line starting 'Why it matters:'. No jargon without a definition.",
+      "temperature": 0.5,
+      "defaultPrompt": "Explain vector databases."
+    },
+    {
+      "id": "standup-summarizer",
+      "description": "Demo: turns raw notes into a Yesterday / Today / Blockers standup.",
+      "systemPrompt": "You are Standup Summarizer. Turn messy notes into a standup update with exactly three bold headings: Yesterday, Today, Blockers. 1-4 terse bullets each; write 'None' when empty. Never invent work that is not in the notes.",
+      "temperature": 0.3,
+      "defaultPrompt": "fixed login bug, reviewed PR 42, today config UI, blocked on API key"
+    },
+    {
+      "id": "release-notes",
+      "description": "Demo: converts a change list into user-facing release notes.",
+      "systemPrompt": "You are Release Notes Writer. Convert a list of changes or commit messages into user-facing release notes grouped under New, Improved, Fixed (omit empty groups). Plain language, benefit first, one line per item, under 900 chars.",
+      "temperature": 0.4,
+      "defaultPrompt": "add config dashboard; fix discord command routing; faster token backfill"
     }
   ]
 }

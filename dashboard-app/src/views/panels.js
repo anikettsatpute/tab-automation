@@ -4,39 +4,6 @@
 import { S, esc, agentIds } from "./state.js";
 import { lpill } from "./loop.js";
 import { pageHead, statRow, emptyState, section, pill, toolbar, searchBox, selectBox, icon } from "./ui.js";
-export function configView() {
-  const c = S.cfgData;
-  if (!c) return `<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><div class="skel" style="height:12px;width:75%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;
-  const provs = c.providers?.providers || [];
-  const agents = c.agents?.agents || [];
-  return `
-  ${pageHead("Configuration", "providers · models · default prompts", `<button class="btn sm primary" id="cfgsave">${icon("save")} Save configuration</button>`)}
-  ${S.cfgMsg ? `<div class="notice ok">${icon("check-circle-2")} ${esc(S.cfgMsg)}</div>` : ""}
-  <p class="hint">Dispatch chain: per-call model → agent.model → provider.modelDefault (${esc(c.providers?.defaultProvider || "muse")}). Empty prompt uses the agent's defaultPrompt.</p>
-  ${section(`Providers (default: ${c.providers?.defaultProvider || "muse"})`, `
-  <div class="tblwrap"><table class="tbl"><thead><tr><th>ID</th><th>Type</th><th>Model default</th><th>Key env</th><th>Endpoint</th></tr></thead><tbody>
-  ${provs.map((p, i) => `<tr><td><b>${esc(p.id)}</b></td><td>${esc(p.type)}</td>
-  <td>${p.type === "muse"
-    ? `<select data-cprov="${i}" data-cf="modelDefault">${["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-spark"].map((m) => `<option ${p.modelDefault === m ? "selected" : ""}>${m}</option>`).join("")}</select>`
-    : `<input data-cprov="${i}" data-cf="modelDefault" value="${esc(p.modelDefault || "")}" placeholder="gpt-5.6-terra">`}</td>
-  <td class="dim">${esc(p.keyEnv || "")}</td><td class="dim">${esc((p.endpoint || "").slice(0, 50))}</td></tr>`).join("")}
-  </tbody></table></div>
-  <div class="row"><label class="fld"><span>Default provider</span><select id="cfg-defprov">${provs.map((p) => `<option ${c.providers?.defaultProvider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label></div>`)}
-  ${section(`Agents (${agents.length})`, agents.map((a, i) => `<div class="stepcard"><div class="row"><b>${icon("bot")} ${esc(a.id)}</b><span class="hint">${esc(a.description || "")}</span><span class="spacer"></span><button class="btn sm ghost" data-cfgtest="${esc(a.id)}">${icon("play")} Test default prompt</button></div>
-  <div class="row"><label class="fld"><span>Provider</span><select data-cagent="${i}" data-cf="provider"><option value="">(default)</option>${provs.map((p) => `<option ${a.provider === p.id ? "selected" : ""}>${esc(p.id)}</option>`).join("")}</select></label>
-  <label class="fld"><span>Model (empty = provider default)</span>${(a.provider || c.providers?.defaultProvider) === "muse" || (!a.provider && c.providers?.defaultProvider === "muse")
-    ? `<select data-cagent="${i}" data-cf="model"><option value="">(provider default)</option>${["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-spark"].map((m) => `<option ${(a.model || a.deployment) === m ? "selected" : ""}>${m}</option>`).join("")}</select>`
-    : `<input data-cagent="${i}" data-cf="model" value="${esc(a.model || a.deployment || "")}" placeholder="provider default">`}</label></div>
-  <label class="fld"><span>Default prompt (used when dispatch prompt is empty)</span><textarea data-cagent="${i}" data-cf="defaultPrompt" rows="2">${esc(a.defaultPrompt || "")}</textarea></label>
-  <div class="row"><label class="fld"><span>Test model override</span><input id="cfgtest-model-${esc(a.id)}" placeholder="empty = agent model"></label>
-  <label class="fld"><span>Test prompt override</span><input id="cfgtest-prompt-${esc(a.id)}" placeholder="empty = defaultPrompt"></label></div>
-  <div id="cfgtest-out-${esc(a.id)}"></div></div>`).join("") + `<div class="row"><button class="btn sm primary" id="cfgsave2">${icon("save")} Save configuration</button></div>`)}
-  ${section(`Streams (${(c.streams?.streams || []).length})`, (c.streams?.streams || []).map((s) => `<div class="appr"><div class="row"><b>${icon("waves")} ${esc(s.name || s.id)}</b><span class="kbd">${esc(s.id)}</span><span class="spacer"></span><span class="hint">${esc(s.description || "")}</span></div>
-  <p class="hint">agents: ${(s.agents || []).map(esc).join(", ") || "—"}</p></div>`).join("") || `<p class="hint">No streams — add them in Setup Step 6.</p>`, `<span class="hint">read-only here</span>`)}
-  ${section(`Task pipelines (${(c.streams?.pipelines || []).length})`, (c.streams?.pipelines || []).map((p) => `<div class="appr"><div class="row"><b>${icon("git-branch")} ${esc(p.name || p.id)}</b><span class="kbd">${esc(p.stream || "")}</span><span class="spacer"></span><span class="hint">${esc(p.description || "")}</span></div>
-  <p class="hint">${(p.agents || []).map(esc).join(" → ") || "—"}</p></div>`).join("") || `<p class="hint">No pipelines — add them in Setup Step 6.</p>`, `<span class="hint">read-only here</span>`)}`;
-}
-
 export function agentsView() {
   return `
   ${pageHead("Agents", `${(S.agents || []).length} configured`)}

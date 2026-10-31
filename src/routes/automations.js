@@ -41,9 +41,24 @@ export function registerAutomationRoutes(app, ctx) {
   });
 
   app.post("/api/control/automations", async (c) => {
+    const g = (await import("../services/access.js")).mutationGuard(c);
+    if (!g.ok) return c.json({ error: g.error }, g.status);
     try {
       const b = await c.req.json().catch(() => ({}));
       if (!b.id && !b.title && !b.name) return c.json({ error: "id or title required" }, 400);
+      const ttype = b.trigger?.type || b.trigger_type || "manual";
+      if (ttype === "discord") {
+        const cmd = String(b.trigger?.command || b.trigger_config?.command || "");
+        if (!/^[a-z][a-z0-9_-]{0,23}$/.test(cmd)) return c.json({ error: "discord trigger needs a command like 'haiku' (lowercase, no '!')" }, 400);
+        const BUILTIN = ["remember", "recall", "memory", "history", "run", "todo", "todos", "done", "digest", "remind", "reminders", "automations", "workflows", "list", "pipelines", "pipeline"];
+        if (BUILTIN.includes(cmd)) return c.json({ error: `!${cmd} is a built-in command` }, 400);
+        const id = b.id || b.title || b.name;
+        const clash = listAutomations(root).find((a) => a.id !== id && a.trigger_type === "discord" && a.trigger_config?.command === cmd);
+        if (clash) return c.json({ error: `!${cmd} is already used by ${clash.id}` }, 409);
+      }
+      for (const s of b.steps || []) {
+        if ((s.type === "agent" || s.type === "run_agent") && s.agent && cfg.agents && !cfg.agents.has(s.agent)) return c.json({ error: `step ${s.id}: unknown agent '${s.agent}'` }, 400);
+      }
       const id = saveAutomation(root, {
         id: b.id || b.title || b.name,
         name: b.title || b.name || b.id,

@@ -9,7 +9,8 @@ import { boardView } from "./views/board.js";
 import { diagramFull } from "./views/loop.js";
 import { wireChat } from "./views/chat.js";
 import { paintDiagrams } from "./views/md.js";
-import { configView, agentsView, toolsView, brainView, requestsView, retroView, paintRetroChart, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
+import { configView } from "./views/config.js";
+import { agentsView, toolsView, brainView, requestsView, retroView, paintRetroChart, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
 let taskTrap = null;
 let taskTrapSel = null;
 
@@ -113,6 +114,123 @@ function render(background = false) {
   wireOnly();
 }
 
+function cfgNotice(msg, err = false) {
+  S.cfgMsg = msg; S.cfgErr = err; render();
+  if (!err) setTimeout(() => { if (S.cfgMsg === msg) { S.cfgMsg = ""; render(); } }, 4000);
+}
+
+async function saveCfg() {
+  if (!S.cfgData) return;
+  const strip = (list) => (list || []).map(({ _new, ...x }) => x);
+  const providers = { ...S.cfgData.providers, providers: strip(S.cfgData.providers?.providers) };
+  delete providers.keyStatus;
+  const agents = { ...S.cfgData.agents, agents: strip(S.cfgData.agents?.agents) };
+  try {
+    await api("/api/control/config", { method: "POST", body: JSON.stringify({ providers, agents }) });
+    S.cfgDirty = false;
+    S.cfgData = await api("/api/control/config");
+    cfgNotice("Configuration saved — dispatch uses it immediately.");
+  } catch (e) { cfgNotice(`Save failed: ${e.message}`, true); }
+}
+
+function wireConfig() {
+  if (S.view !== "config") return;
+  const c = S.cfgData;
+  const dirty = () => { if (!S.cfgDirty) { S.cfgDirty = true; render(); } };
+  $$("[data-cfgtab]").forEach((b) => (b.onclick = () => { S.cfgTab = b.dataset.cfgtab; render(); }));
+  for (const id of ["#cfgsave", "#cfgsave2", "#cfgsave3"]) { const b = $(id); if (b) b.onclick = saveCfg; }
+  // providers
+  $$("[data-pi]").forEach((el) => (el.onchange = () => {
+    const p = c?.providers?.providers?.[+el.dataset.pi]; if (!p) return;
+    const f = el.dataset.pf;
+    p[f] = f === "models" ? el.value.split(",").map((s) => s.trim()).filter(Boolean) : el.value.trim();
+    if (f === "type") render();
+    dirty();
+  }));
+  $$("[data-pdel]").forEach((b) => (b.onclick = () => { c.providers.providers.splice(+b.dataset.pdel, 1); S.cfgDirty = true; render(); }));
+  const ap = $("#cfg-addprov"); if (ap) ap.onclick = () => { c.providers.providers.push({ _new: true, id: "", type: "openrouter", keyEnv: "", endpoint: "", modelDefault: "", models: [] }); S.cfgDirty = true; render(); };
+  const dp = $("#cfg-defprov"); if (dp) dp.onchange = () => { c.providers.defaultProvider = dp.value; dirty(); };
+  // agents
+  $$("[data-aopen]").forEach((b) => (b.onclick = () => { S.cfgOpenAgent = S.cfgOpenAgent === b.dataset.aopen ? null : b.dataset.aopen; render(); }));
+  $$("[data-ai]").forEach((el) => (el.onchange = () => {
+    const a = c?.agents?.agents?.[+el.dataset.ai]; if (!a) return;
+    const f = el.dataset.af;
+    if (el.value === "" && f !== "systemPrompt" && f !== "id") delete a[f]; else a[f] = f === "temperature" ? Number(el.value) : el.value;
+    if (f === "provider") { delete a.model; render(); }
+    dirty();
+  }));
+  $$("[data-adel]").forEach((b) => (b.onclick = () => { c.agents.agents.splice(+b.dataset.adel, 1); S.cfgDirty = true; render(); }));
+  const aa = $("#cfg-addagent"); if (aa) aa.onclick = () => { c.agents.agents.unshift({ _new: true, id: "", description: "", systemPrompt: "" }); S.cfgDirty = true; render(); };
+  // discord
+  const dcs = $("#dc-save"); if (dcs) dcs.onclick = async () => {
+    const body = { mainChannelId: $("#dc-main").value.trim(), guildId: $("#dc-guild").value.trim(), ownerUserId: $("#dc-owner").value.trim(), extraChannels: $("#dc-extra").value };
+    try {
+      const r = await api("/api/control/config/discord", { method: "POST", body: JSON.stringify(body) });
+      if (r.discord) S.cfgData.discord = r.discord;
+      cfgNotice("Discord routing saved.");
+    } catch (e) { cfgNotice(`Discord save failed: ${e.message}`, true); }
+  };
+  // pipelines
+  const firstAgent = () => (c?.agents?.agents || []).find((a) => !a._new)?.id || "";
+  const pn = $("#pp-new"); if (pn) pn.onclick = () => { S.pipeEdit = { _new: true, id: "", name: "", description: "", steps: [{ role: firstAgent(), goal: "" }] }; render(); };
+  $$("[data-ppedit]").forEach((b) => (b.onclick = () => { const t = (S.loopTypes || []).find((x) => x.id === b.dataset.ppedit); if (t) { S.pipeEdit = JSON.parse(JSON.stringify(t)); render(); } }));
+  const pe = S.pipeEdit;
+  if (pe) {
+    for (const [sel, k] of [["#pp-id", "id"], ["#pp-name", "name"], ["#pp-desc", "description"]]) { const el = $(sel); if (el) el.oninput = () => { pe[k] = el.value; }; }
+    $$("[data-pps]").forEach((el) => (el.oninput = el.onchange = () => { const s = pe.steps[+el.dataset.pps]; if (s) s[el.dataset.ppf] = el.value; }));
+    $$("[data-ppup]").forEach((b) => (b.onclick = () => { const i = +b.dataset.ppup; if (i > 0) { [pe.steps[i - 1], pe.steps[i]] = [pe.steps[i], pe.steps[i - 1]]; render(); } }));
+    $$("[data-ppsdel]").forEach((b) => (b.onclick = () => { pe.steps.splice(+b.dataset.ppsdel, 1); render(); }));
+    const as = $("#pp-addstep"); if (as) as.onclick = () => { pe.steps.push({ role: firstAgent(), goal: "" }); render(); };
+    const pc = $("#pp-cancel"); if (pc) pc.onclick = () => { S.pipeEdit = null; render(); };
+    const ps = $("#pp-save"); if (ps) ps.onclick = async () => {
+      const { _new, ...tt } = pe;
+      try {
+        const r = await api(`${LOOP}/task-types`, { method: "POST", body: JSON.stringify(tt) });
+        S.loopTypes = r.taskTypes || S.loopTypes; S.pipeEdit = null;
+        cfgNotice(`Pipeline ${tt.id} saved — run it with !pipeline ${tt.id} <goal>.`);
+      } catch (e) { cfgNotice(`Pipeline save failed: ${e.message}`, true); }
+    };
+  }
+  $$("[data-ppdel]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(`Delete pipeline ${b.dataset.ppdel}?`)) return;
+    try { const r = await api(`${LOOP}/task-types/${encodeURIComponent(b.dataset.ppdel)}`, { method: "DELETE" }); S.loopTypes = r.taskTypes || []; cfgNotice("Pipeline deleted."); }
+    catch (e) { cfgNotice(`Delete failed: ${e.message}`, true); }
+  }));
+  $$("[data-pprun]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.pprun; const goal = $(`#pprun-goal-${id}`)?.value.trim();
+    if (!goal) { cfgNotice("Type a goal first.", true); return; }
+    try {
+      await api(`${LOOP}/requests`, { method: "POST", body: JSON.stringify({ text: goal, taskType: id, mode: "direct", dispatcher: "muse" }) });
+      cfgNotice(`Pipeline ${id} started — watch it on the Board.`); tick(true);
+    } catch (e) { cfgNotice(`Run failed: ${e.message}`, true); }
+  }));
+  // automation builder
+  const abn = $("#ab-new"); if (abn) abn.onclick = () => { S.autoEdit = { id: "", title: "", description: "", trigger: "discord", command: "", steps: [{ id: "s1", agent: firstAgent(), prompt: "{{trigger.text}}" }] }; render(); };
+  const ab = S.autoEdit;
+  if (ab) {
+    for (const [sel, k] of [["#ab-id", "id"], ["#ab-title", "title"], ["#ab-desc", "description"], ["#ab-cmd", "command"]]) { const el = $(sel); if (el) el.oninput = () => { ab[k] = el.value.trim(); }; }
+    const tr = $("#ab-trig"); if (tr) tr.onchange = () => { ab.trigger = tr.value; render(); };
+    $$("[data-abs]").forEach((el) => (el.oninput = el.onchange = () => { const s = ab.steps[+el.dataset.abs]; if (s) s[el.dataset.abf] = el.value; }));
+    $$("[data-absdel]").forEach((b) => (b.onclick = () => { ab.steps.splice(+b.dataset.absdel, 1); render(); }));
+    const add = $("#ab-addstep"); if (add) add.onclick = () => { const prev = ab.steps[ab.steps.length - 1]; const n = ab.steps.length + 1; ab.steps.push({ id: `s${n}`, agent: firstAgent(), prompt: prev ? `{{steps.${prev.id}}}` : "{{trigger.text}}" }); render(); };
+    const cn = $("#ab-cancel"); if (cn) cn.onclick = () => { S.autoEdit = null; render(); };
+    const sv = $("#ab-save"); if (sv) sv.onclick = async () => {
+      if (!ab.id || !ab.steps.length) { cfgNotice("Automation needs an id and at least one step.", true); return; }
+      const body = {
+        id: ab.id, title: ab.title || ab.id, description: ab.description, trigger_type: ab.trigger,
+        trigger_config: ab.trigger === "discord" ? { command: ab.command } : {},
+        steps: ab.steps.map((s) => ({ id: s.id, type: "agent", agent: s.agent, prompt: s.prompt || "{{trigger.text}}", title: `${s.agent}` })),
+      };
+      try {
+        await api("/api/control/automations", { method: "POST", body: JSON.stringify(body) });
+        S.autoEdit = null;
+        cfgNotice(ab.trigger === "discord" ? `Saved — type !${ab.command} <text> in Discord.` : "Automation saved.");
+        tick(true);
+      } catch (e) { cfgNotice(`Automation save failed: ${e.message}`, true); }
+    };
+  }
+}
+
 function wireOnly() {
   const menu = $("#menu");
   if (menu) menu.onclick = () => { const side = $(".side"); const open = side?.classList.toggle("open"); menu.setAttribute("aria-expanded", open ? "true" : "false"); };
@@ -151,13 +269,7 @@ function wireOnly() {
   const dc = $("#dclose"); if (dc) dc.onclick = () => closeTaskDetail();
   const backdrop = $("[data-drawer-backdrop]"); if (backdrop) backdrop.onclick = () => closeTaskDetail();
   wireLoopDetail();
-  // config view wiring
-  $$("[data-cprov]").forEach((el) => (el.onchange = () => { if (S.cfgData?.providers?.providers?.[+el.dataset.cprov]) S.cfgData.providers.providers[+el.dataset.cprov][el.dataset.cf] = el.value; }));
-  $$("[data-cagent]").forEach((el) => (el.onchange = () => { if (S.cfgData?.agents?.agents?.[+el.dataset.cagent]) S.cfgData.agents.agents[+el.dataset.cagent][el.dataset.cf] = el.value; }));
-  const dp = $("#cfg-defprov"); if (dp) dp.onchange = () => { if (S.cfgData?.providers) S.cfgData.providers.defaultProvider = dp.value; };
-  const csv = $("#cfgsave"); if (csv) csv.onclick = saveCfg;
-  const csv2 = $("#cfgsave2"); if (csv2) csv2.onclick = saveCfg;
-  async function saveCfg() { if (!S.cfgData) return; await api("/api/control/config", { method: "POST", body: JSON.stringify({ providers: S.cfgData.providers, agents: S.cfgData.agents }) }); S.cfgMsg = "Configuration saved — dispatch uses it immediately."; render(); setTimeout(() => { S.cfgMsg = ""; render(); }, 3000); }
+  wireConfig();
   $$("[data-cfgtest]").forEach((b) => (b.onclick = async () => {
     const id = b.dataset.cfgtest; const mo = $(`#cfgtest-model-${id}`); const pr = $(`#cfgtest-prompt-${id}`); const out = $(`#cfgtest-out-${id}`);
     if (out) out.innerHTML = `<p class="hint">Dispatching ${esc(id)}…</p>`;
@@ -688,7 +800,13 @@ async function tick(force) {
     if (Array.isArray(dispatchers?.dispatchers)) S.dispatchers = dispatchers.dispatchers;
     if (Array.isArray(loopTypes?.taskTypes)) S.loopTypes = loopTypes.taskTypes;
     if (Array.isArray(loopAgents?.agents)) S.loopAgents = loopAgents.agents;
-    if (cfgData) S.cfgData = cfgData;
+    // Keep unsaved local edits; refresh only server-derived status fields.
+    if (cfgData && cfgData.providers) {
+      if (S.cfgDirty && S.cfgData) {
+        S.cfgData.discord = cfgData.discord;
+        if (S.cfgData.providers) S.cfgData.providers.keyStatus = cfgData.providers.keyStatus;
+      } else S.cfgData = cfgData;
+    }
     // Assertive announcement only for newly blocked loop tasks (polite for the rest).
     try {
       const nowBlocked = (S.loopTasks || []).filter((r) => (r.status === "blocked" || r.status === "failed") && !prevBlocked.has(r.id));
