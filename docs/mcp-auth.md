@@ -48,3 +48,6 @@ For any HTTP MCP server that requires OAuth:
   manually, then Authorize. Needs `MS_CLIENT_ID/SECRET` + refresh token.
 - `reddit`: script-app `REDDIT_CLIENT_ID/SECRET` + username/password; refresh
   automatically via `grant_type=refresh_token`.
+- `finance-us`: stdio `npx -y yahoo-finance-mcp`, no key needed. 15 tools
+  (get_quote, get_historical_data, get_news, ...). Granted to `finance-us`
+  by default; same Yahoo data source as `src/finance.js`.
