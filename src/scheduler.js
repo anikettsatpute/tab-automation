@@ -44,16 +44,16 @@ export function startScheduler(cfg, deps) {
   const tick = async () => {
     const now = new Date();
     const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
-    // due reminders (every tick, cheap indexed query)
+    // due reminders: durable enqueue (worker delivers via real sendDiscord),
+    // never direct send from the tick. Tick stays fast; HTTP returns fast.
     try {
-      const { dueReminders, markReminderSent } = await import("./db.js");
+      const { dueReminders, enqueueJobSync } = await import("./db.js");
       for (const r of dueReminders(cfg.root)) {
         try {
-          await deps.sendDiscord?.(r.channel_id || undefined, `⏰ Reminder: ${r.text}`);
-          markReminderSent(cfg.root, r.id);
-          deps.log?.(`[scheduler] reminder sent ${r.id}`);
+          enqueueJobSync(cfg.root, { kind: "chat", payload: { text: `⏰ Reminder: ${r.text}`, workflow: "reminder-delivery", reminderId: r.id, channel: r.channel_id || "" }, idempotencyKey: `reminder:${r.id}` });
+          deps.log?.(`[scheduler] reminder ${r.id} enqueued`);
         } catch (e) {
-          deps.log?.(`[scheduler] reminder ${r.id} failed: ${e.message}`);
+          deps.log?.(`[scheduler] reminder ${r.id} enqueue failed: ${e.message}`);
         }
       }
     } catch (e) {
@@ -72,18 +72,44 @@ export function startScheduler(cfg, deps) {
         if (!claimCronSlot(cfg.root, `${w.id}:${key}`)) { deps.log?.(`[scheduler] ${w.id} slot taken — skipping`); continue; }
       } catch {}
       deps.log?.(`[scheduler] firing ${w.id}`);
+      // Enqueue, never await: the durable worker runs the workflow.
       try {
-        await deps.runWorkflow(w, { kind: "schedule", at: now.toISOString() });
+        const { enqueueJobSync } = await import("./db.js");
+        enqueueJobSync(cfg.root, { kind: "automation", payload: { automationId: w.id, workflowId: w.id }, idempotencyKey: `sched:wf:${w.id}:${key}` });
       } catch (err) {
-        deps.log?.(`[scheduler] ${w.id} failed: ${err.message}`);
+        deps.log?.(`[scheduler] ${w.id} enqueue failed: ${err.message}`);
       }
     }
     // DB automations (reference: YOUR FLOWS with schedule trigger) — same 30s tick.
-    // Agent JSON -> task steps -> next step all persist via runWorkflow->recordStep.
+    // Enqueue, never await: the durable worker runs the flow; the tick stays fast.
+    // Scheduler edits to DB automations affect actual schedules: this loop reads
+    // listAutomations() live (trigger_type/trigger_config/enabled) every tick.
+    // Unsupported trigger types are rejected, never silently run: "event" has no
+    // firing path here (dashboard.request_created is the only supported event
+    // rule and it fires from the request intake, not the clock).
     try {
-      const { listAutomations, markAutomationRun } = await import("./db.js");
+      const { listAutomations, enqueueJobSync } = await import("./db.js");
+      let describeTrigger = null;
+      try { ({ describeTrigger } = await import("./services/triggers.js")); } catch {}
       for (const a of listAutomations(cfg.root)) {
         if (!a.enabled) continue;
+        if (a.trigger_type !== "manual" && a.trigger_type !== "schedule" && a.trigger_type !== "event") {
+          deps.log?.(`[scheduler] automation ${a.id} has unsupported trigger_type '${a.trigger_type}' — skipping (not enqueued)`);
+          continue;
+        }
+        if (a.trigger_type === "event") {
+          const rule = a.trigger_config?.eventRule || a.trigger_config?.event || "";
+          const supported = typeof describeTrigger === "function"
+            ? describeTrigger("event", { eventRule: rule })
+            : { ok: rule === "dashboard.request_created", error: "unsupported event rule" };
+          if (!supported?.ok) {
+            deps.log?.(`[scheduler] automation ${a.id} unsupported event '${rule || "(none)"}' — skipping (never silently run)`);
+            continue;
+          }
+          // Supported event rules fire from their source (request intake),
+          // not from the clock tick — never enqueue here.
+          continue;
+        }
         const cron = a.trigger_config?.cron;
         const everyMin = Number(a.trigger_config?.everyMinutes) || 0;
         const dueCron = a.trigger_type === "schedule" && cron && matchesCron(cron, now);
@@ -97,14 +123,11 @@ export function startScheduler(cfg, deps) {
           const { claimCronSlot } = await import("./db.js");
           if (dueCron && !claimCronSlot(cfg.root, `${seenKey}:${key}`)) { deps.log?.(`[scheduler] automation ${a.id} slot taken — skipping`); continue; }
         } catch {}
-        deps.log?.(`[scheduler] firing automation ${a.id}`);
-        const wf = { id: a.id, name: a.name, steps: a.steps };
+        deps.log?.(`[scheduler] enqueue automation ${a.id}`);
         try {
-          const ctx = await deps.runWorkflow(wf, { kind: "schedule", at: now.toISOString(), automation: a.id });
-          markAutomationRun(cfg.root, a.id, { status: "done", runId: ctx?._runId || null });
+          enqueueJobSync(cfg.root, { kind: "automation", payload: { automationId: a.id }, idempotencyKey: `sched:${a.id}:${dueCron ? key : `interval-${Math.floor(now.getTime() / (everyMin * 60000))}`}` });
         } catch (err) {
-          try { markAutomationRun(cfg.root, a.id, { status: `failed: ${String(err.message).slice(0, 120)}` }); } catch {}
-          deps.log?.(`[scheduler] automation ${a.id} failed: ${err.message}`);
+          deps.log?.(`[scheduler] automation ${a.id} enqueue failed: ${err.message}`);
         }
       }
     } catch (e) {

@@ -58,16 +58,57 @@ export function registerAutomationRoutes(app, ctx) {
   });
 
   app.post("/api/control/automations/:id/run", async (c) => {
+    const g = (await import("../services/access.js")).mutationGuard(c);
+    if (!g.ok) return c.json({ error: g.error }, g.status);
     try {
       const id = c.req.param("id");
-      const { runWorkflow } = await import("../workflow.js");
+      const { idempotencyKey } = await c.req.json().catch(() => ({}));
+      const auto = listAutomations(root).find((a) => a.id === id);
+      const wf = auto ? { id } : (cfg.workflows || []).find((w) => w.id === id);
+      if (!wf) return c.json({ error: "not found" }, 404);
+      const { enqueueJobSync, audit } = await import("../db.js");
+      const { id: jobId, deduped, job } = enqueueJobSync(root, {
+        kind: "automation", payload: { automationId: id }, idempotencyKey: idempotencyKey || null,
+      });
+      audit(root, { actor: (await import("../services/access.js")).auditActor(c), action: "automation.run.enqueue", target: id, detail: `job ${jobId}` });
+      return c.json({ ok: true, jobId, deduped: !!deduped, status: job.status, hint: "202 accepted — poll /api/control/jobs/:id for runId" }, deduped ? 200 : 202);
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
+  // Dry-run: real non-side-effect simulation, step-by-step trace. Never a fake success.
+  app.post("/api/control/automations/:id/dry-run", async (c) => {
+    try {
+      const id = c.req.param("id");
       const auto = listAutomations(root).find((a) => a.id === id);
       const steps = auto?.steps?.length ? auto.steps.map((s) => ({ id: s.id, type: s.type, ...s })) : null;
       const wf = steps ? { id, name: auto.name, steps } : (cfg.workflows || []).find((w) => w.id === id);
       if (!wf) return c.json({ error: "not found" }, 404);
-      const ctx2 = await runWorkflow(cfg, { log, sendDiscord: async () => {} }, wf, { kind: "dashboard-flow", automation: id });
-      try { markAutomationRun(root, id, { status: "done", runId: ctx2._runId || null }); } catch {}
-      return c.json({ ok: true, runId: ctx2._runId || null });
+      const { dryRunAutomation } = await import("../services/triggers.js");
+      return c.json({ ok: true, dryRun: true, ...dryRunAutomation(wf) });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
+  // Next-run: backend-computed from cron/everyMinutes + timezone label.
+  app.get("/api/control/automations/:id/next-run", async (c) => {
+    try {
+      const auto = listAutomations(root).find((a) => a.id === c.req.param("id"));
+      if (!auto) return c.json({ error: "not found" }, 404);
+      const { describeTrigger } = await import("../services/triggers.js");
+      const d = describeTrigger(auto.trigger_type, auto.trigger_config || {});
+      if (!d.ok) return c.json({ ok: false, automation: auto.id, error: d.error }, 400);
+      return c.json({ ok: true, automation: auto.id, trigger: { type: auto.trigger_type, ...(auto.trigger_config || {}) }, ...d, state: auto.state || null });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
+  // Trigger validation on save: invalid cron / unsupported event rejected
+  // with field errors (never silently succeeding).
+  app.post("/api/control/automations/validate", async (c) => {
+    try {
+      const b = await c.req.json().catch(() => ({}));
+      const { describeTrigger } = await import("../services/triggers.js");
+      const d = describeTrigger(b.trigger?.type || b.trigger_type || "manual", { ...(b.trigger || {}), ...(b.trigger_config || {}) });
+      if (!d.ok) return c.json({ ok: false, error: d.error }, 400);
+      return c.json({ ok: true, ...d });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 

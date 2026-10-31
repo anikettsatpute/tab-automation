@@ -1,9 +1,8 @@
-// Rick planner: routes Discord messages to simple-fact replies or big-task pipelines.
-// A pipeline is an ephemeral workflow built from available agents + tools,
-// executed with the same engine (addressable {{steps.*}} vars, yes/no conditions,
-// owner approval steps), with progress + final result posted back in-channel.
-import { chatWithTools } from "./agent.js";
-import { runWorkflow, chunk } from "./workflow.js";
+// Rick planner: routes Discord messages to queued chat replies or queued pipelines.
+// No direct model calls here: classification + pipeline planning are
+// deterministic; the worker is the sole model executor (Meta-gated,
+// envelope file, reconciliation, in-channel delivery).
+import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, recentChannel } from "./memory.js";
 import { listRuns, addTodo, listTodos, completeTodo, addReminder } from "./db.js";
 
@@ -64,19 +63,14 @@ export function resolveRunTarget(cfg, text, channelHistory) {
   return null;
 }
 
-/** Decide simple-fact vs big-task. Heuristic first, agent fallback for ambiguity. */
-export async function classifyTask(cfg, text) {
-  if (text.length > 300 || BIG_TASK_HINTS.test(text)) return "big-task";
-  if (/^(who|what|when|where|why|how|is|are|can|do|does|price|news|weather)\b/i.test(text.trim()) && text.length < 200) return "simple-fact";
-  // Ambiguous: ask the assistant agent (cheap, one call)
-  try {
-    const verdict = await chatWithTools(cfg, "assistant",
-      `Classify this user request as exactly one word, no other text: "simple-fact" (answerable directly) or "big-task" (needs multiple steps, tools, or agents).\nRequest: ${text.slice(0, 500)}`,
-      {});
-    return /big-task/i.test(verdict) ? "big-task" : "simple-fact";
-  } catch {
-    return "simple-fact";
-  }
+/** Decide simple-fact vs big-task. Deterministic heuristic only — no model
+ *  call. Ambiguous short text defaults to simple-fact (queued chat); the
+ *  worker is the sole model executor (Meta gate, envelope, reconcile). */
+export function classifyTask(cfg, text) {
+  void cfg;
+  const t = String(text || "");
+  if (t.length > 300 || BIG_TASK_HINTS.test(t)) return "big-task";
+  return "simple-fact";
 }
 
 /** Generic-prompt router: plain-English task types map to real automations
@@ -104,41 +98,25 @@ export function routeGenericPrompt(cfg, text) {
   return null;
 }
 
-/** Build a pipeline workflow doc from the planner agent.
- *  The planner sees the REAL workflow/agent/tool catalogs so it reuses
- *  existing automations instead of inventing new ones. */
-export async function planPipeline(cfg, text, historyBlock = "") {
-  const agents = agentCatalog(cfg);
-  const workflows = workflowCatalog(cfg);
-  const tools = toolCatalog(cfg);
-  const spec = await chatWithTools(cfg, "assistant",
-    `You are Rick's pipeline planner. Ground truth — never invent IDs outside these lists.\n\nEXISTING AUTOMATIONS (prefer these; reply {"useWorkflow": "<id>"} if one fits):\n${workflows}\n\nAvailable agents:\n${agents}\n\nAvailable tools:\n${tools}\n\nUser request: ${text.slice(0, 1000)}${historyBlock.slice(0, 1500)}\n\n` +
-    `If an existing automation fits, respond with ONLY {"useWorkflow": "<exact-id>"}. Otherwise respond with ONLY valid JSON, no other text: {"steps": [{"id": "<stepid>", "agent": "<agent-id>", "prompt": "<prompt using {{steps.<earlier-id>}} refs where needed>", "output": "text"}]}. ` +
-    `Max 6 steps. First step prompt must include the user request. Keep prompts short. Only use agent IDs from the list above.`,
-    {});
-  let doc;
-  try {
-    const clean = String(spec).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
-    doc = JSON.parse(clean);
-  } catch {
-    throw new Error("Planner did not return valid JSON");
+/** Build a pipeline workflow doc deterministically (no model call).
+ *  The planner never executes inference: explicit workflow mention reuses
+ *  the REAL automation; otherwise a single selected-assistant step carries
+ *  the full goal + history. The worker is the sole model executor. */
+export function planPipeline(cfg, text, historyBlock = "") {
+  const t = String(text || "");
+  for (const w of cfg.workflows ?? []) {
+    if (t.toLowerCase().includes(String(w.id || "").toLowerCase())) return { useWorkflow: w.id };
   }
-  if (doc.useWorkflow) {
-    const wf = (cfg.workflows ?? []).find((w) => w.id === doc.useWorkflow);
-    if (!wf) throw new Error(`Planner chose unknown workflow '${doc.useWorkflow}'`);
-    return { useWorkflow: wf.id };
-  }
-  const steps = (doc.steps ?? []).slice(0, 6);
-  if (!steps.length) throw new Error("Planner returned no steps");
-  for (const s of steps) {
-    if (!cfg.agents.has(s.agent)) throw new Error(`Planner used unknown agent '${s.agent}'`);
-    s.type = "agent";
-  }
+  const agentIds = [...(cfg.agents?.keys?.() ?? [])];
+  const agent = agentIds.includes("assistant") ? "assistant" : (agentIds[0] || "assistant");
+  const goal = `${t.slice(0, 1500)}${String(historyBlock || "").slice(0, 1500)}`.slice(0, 4000);
+  const stepId = "step-1";
+  const steps = [{ id: stepId, type: "agent", agent, prompt: goal }];
   return {
     id: `pipeline-${Date.now().toString(36)}`,
     name: "Rick pipeline",
     trigger: { type: "manual" },
-    steps: [...steps, { id: "report", type: "discord_send", message: `✅ Done — here's the result:\n\n{{steps.${steps[steps.length - 1].id}}}` }],
+    steps: [...steps, { id: "report", type: "discord_send", message: `✅ Done — here's the result:\n\n{{steps.${stepId}}}` }],
   };
 }
 
@@ -186,8 +164,7 @@ export async function handleRickMessage(cfg, deps, msg, text) {
   // an automation run is self-contained. Both show live progress in the dashboard.
   const generic = routeGenericPrompt(cfg, text);
   if (generic?.kind === "taskType" && !targetId) {
-    const { createTask, saveTaskSteps, getRun, updateTask, getTaskWithSteps } = await import("./db.js");
-    const { runWorkflow } = await import("./workflow.js");
+    const { createTask, saveTaskSteps } = await import("./db.js");
     const { loadJson } = await import("./setup-api.js");
     const doc = loadJson("config/streams.json", { taskTypes: [] });
     const type = (doc.taskTypes || []).find((t) => t.id === generic.id);
@@ -205,53 +182,17 @@ export async function handleRickMessage(cfg, deps, msg, text) {
       }));
       saveTaskSteps(cfg.root, taskId, steps.map((s, i) => ({ step_id: s.id, type: s.type, agent: s.agent, model: "", status: "pending", prompt: s.prompt, output: "", position: i })));
       const wf = { id: `task-${taskId}`, name: `${type.name} ${taskId}`, trigger: { type: "manual" }, steps };
-      // Completion goes back as a REPLY to the user's message (threaded) with
-      // the final result — never a stray "Plan" pipeline. replyTo=null here so
-      // index.js's generic "✅ done" doesn't double-post; we post one summary.
-      let runId = null, runStatus = "done", runErr = "";
-      try {
-        const ctx = await deps.runWorkflow(wf, { kind: "discord-task", text, user: msg.author.tag, channelId: msg.channelId, taskId, taskType: type.id }, msg.channelId, null);
-        runId = ctx._runId || null;
-      } catch (e) { runStatus = "failed"; runErr = String(e.message || e).slice(0, 300); }
-      if (!runId) {
-        try {
-          const { listRuns } = await import("./db.js");
-          runId = (listRuns(cfg.root, { workflowId: `task-${taskId}`, limit: 1 })[0] || {}).id || null;
-        } catch {}
-      }
-      try {
-        if (runId) {
-          const full = getRun(cfg.root, runId);
-          if (full) {
-            runStatus = full.status || runStatus; runErr = full.error || runErr;
-            const synced = steps.map((s, i) => {
-              const rs = (full.steps || []).find((x) => x.step_id === s.id) || (full.steps || [])[i];
-              const st = !rs ? "pending" : rs.status === "ok" ? "done" : rs.status === "failed" ? "failed" : "pending";
-              let out = "";
-              if (rs) { try { const oj = rs.output_json ? JSON.parse(rs.output_json) : null; out = String(oj?.output || oj?.summary || rs.raw_text || "").slice(0, 8000); } catch { out = String(rs.raw_text || "").slice(0, 8000); } }
-              return { step_id: s.id, type: s.type, agent: s.agent, model: "", status: st, prompt: s.prompt, output: out, position: i };
-            });
-            saveTaskSteps(cfg.root, taskId, synced);
-            const doneCount = synced.filter((s) => s.status === "done").length;
-            updateTask(cfg.root, taskId, { status: runStatus === "done" ? "done" : "failed", progress: Math.round((doneCount / Math.max(1, synced.length)) * 100), blocked_reason: runStatus === "done" ? "" : runErr.slice(0, 500) });
-          }
-        }
-      } catch {}
-      // One completion reply, threaded on the user's goal: result summary.
-      // This is the ONLY "done" message for a task (no Plan/Done pipeline).
-      try {
-        const d = getTaskWithSteps(cfg.root, taskId);
-        const doneSteps = (d?.steps || []).filter((s) => s.status === "done");
-        const lastOut = [...(d?.steps || [])].reverse().find((s) => s.output)?.output || "";
-        if (runStatus === "done") {
-          const summary = `✅ **${type.name}** done (${doneSteps.length}/${steps.length} steps).\n\n${String(lastOut).slice(0, 1500)}`;
-          for (const part of chunk(summary)) await msg.reply(part);
-        } else {
-          for (const part of chunk(`❌ **${type.name}** ${runStatus}: ${String(runErr || "step failed").slice(0, 500)}`)) await msg.reply(part);
-        }
-      } catch {}
-      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Launched task ${taskId} [${type.id}] -> run ${runId || "?"} (${runStatus})`.slice(0, 500), channelId: msg.channelId });
-      return { kind: "task", taskType: type.id, taskId, runId, status: runStatus };
+      // Durable enqueue: the worker is the sole executor. The task row +
+      // steps are created now; the worker runs the agent chain and syncs
+      // task_steps on completion. Reply is the queue ack only.
+      const { enqueueJobSync } = await import("./db.js");
+      const { id: jobId } = enqueueJobSync(cfg.root, {
+        kind: "request",
+        payload: { text: String(text).slice(0, 4000), mode: "request", stream: type.stream || "general", agents: type.agents || [], taskId },
+        idempotencyKey: `discord-task:${taskId}`,
+      });
+      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Task ${taskId} [${type.id}] queued as job ${jobId}`.slice(0, 500), channelId: msg.channelId });
+      return { kind: "task", taskType: type.id, taskId, jobId, status: "queued" };
     }
   }
   if (generic?.kind === "workflow" && !targetId) {
@@ -259,14 +200,18 @@ export async function handleRickMessage(cfg, deps, msg, text) {
     if (wf) {
       saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
       await msg.channel.sendTyping().catch(() => {});
-      await msg.reply(`⚙️ Automation queued: **${wf.id}**. Watch the dashboard Runs tab — progress streams there.`);
-      const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+      // Durable enqueue only: the worker runs the REAL configured steps.
+      // No awaiting runWorkflow — the handle is a queue ack ({ _jobId }),
+      // never a fake complete brain status. Completion posts via the
+      // worker's deliverDiscordCompletion (job payload carries channelId +
+      // messageId for the in-thread reply link).
       const ctx = await deps.runWorkflow(wf, {
         kind: "discord", command: wf.trigger?.command || wf.id,
         text, user: msg.author.tag, channelId: msg.channelId,
-      }, msg.channelId, replyTo);
-      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Ran workflow ${wf.id}: ${Object.keys(ctx.steps).join(", ")}`.slice(0, 500), channelId: msg.channelId });
-      return { kind: "workflow", pipeline: wf.id, steps: Object.keys(ctx.steps) };
+        messageId: msg.id || null,
+      }, msg.channelId, async (t) => { for (const part of chunk(t)) await msg.reply(part); });
+      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Queued workflow ${wf.id} as job ${ctx?._jobId || ctx?.jobId || "?"}`.slice(0, 500), channelId: msg.channelId });
+      return { kind: "workflow", pipeline: wf.id, jobId: ctx?._jobId || ctx?.jobId || null, status: "queued" };
     }
   }
   if (targetId) {
@@ -274,14 +219,14 @@ export async function handleRickMessage(cfg, deps, msg, text) {
     if (wf) {
       saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
       await msg.channel.sendTyping().catch(() => {});
-      await msg.reply(`▶️ Running **${wf.id}**…`);
-      const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+      // Durable enqueue only (see above): queue ack now, worker delivers.
       const ctx = await deps.runWorkflow(wf, {
         kind: "discord", command: wf.trigger?.command || wf.id,
         text, user: msg.author.tag, channelId: msg.channelId,
-      }, msg.channelId, replyTo);
-      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Ran workflow ${wf.id}: ${Object.keys(ctx.steps).join(", ")}`.slice(0, 500), channelId: msg.channelId });
-      return { kind: "workflow", pipeline: wf.id, steps: Object.keys(ctx.steps) };
+        messageId: msg.id || null,
+      }, msg.channelId, async (t) => { for (const part of chunk(t)) await msg.reply(part); });
+      saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Queued workflow ${wf.id} as job ${ctx?._jobId || ctx?.jobId || "?"}`.slice(0, 500), channelId: msg.channelId });
+      return { kind: "workflow", pipeline: wf.id, jobId: ctx?._jobId || ctx?.jobId || null, status: "queued" };
     }
   }
   // 0c) bare "run it" with no resolvable target -> ask which one (never guess, never invent)
@@ -294,44 +239,56 @@ export async function handleRickMessage(cfg, deps, msg, text) {
   }
 
   // 0d) fast path: simple todo/reminder requests skip classification entirely —
-  // one agent call with tools, one reply. No pipeline, no "breaking into steps".
+  // still queued (no direct model call). The worker runs the assistant step.
   const isSimpleTask = /\b(remind me|remind .*?in \d+\s*(min|hour)|add (a )?todo|remember to (do|buy|call|pay|fill|send)?)\b/i.test(text);
-  const kind = isSimpleTask ? "simple-fact" : await classifyTask(cfg, text);
+  const kind = isSimpleTask ? "simple-fact" : classifyTask(cfg, text);
   if (kind === "simple-fact") {
+    // Durable queued chat: no direct model call in the planner. The worker
+    // (sole executor, Meta-gated) runs assistant via executeAgentStep,
+    // writes the envelope file, reconciles, and delivers the completion
+    // to channelId/messageId. Single queue-ack now; Brain stays running.
     saveMemory(cfg.root, { kind: "chat", user: msg.author.tag, text, channelId: msg.channelId });
+    await msg.channel.sendTyping().catch(() => {});
     const hits = searchMemory(cfg.root, text, 5).filter((h) => h.text !== text);
     const catalog = workflowCatalog(cfg);
     const nowUtc = new Date();
     const ist = new Date(nowUtc.getTime() + 5.5 * 3600_000);
     const fmt = (d) => d.toISOString().slice(0, 16).replace("T", " ");
-    const reply = await chatWithTools(cfg, "assistant",
-      `User ${msg.author.tag} says: ${text}${historyBlock}`,
-      { extraContext: `${formatMemories(hits)}\n\nNow: UTC ${fmt(nowUtc)}, IST (India) ${fmt(ist)}. You manage todos/reminders with tools: todo_add(text, due?, priority?) saves a todo; todo_list shows them; todo_done(id) completes; remind_add(text, at=ISO datetime) sets a reminder — resolve relative times ("in 15 minutes", "tomorrow 12pm", "at 11pm") against the times above, assume IST unless the user says otherwise, and call the tool immediately in this same reply. Confirm briefly what you saved and when it fires. Daily digest posts automatically at 08:00; due reminders fire on time.\n\nREAL automations (never invent others; offer to run one by exact id):\n${catalog}`,
-        toolCtx: { user: msg.author.tag, channelId: msg.channelId } });
-    saveMemory(cfg.root, { kind: "reply", user: "Rick", text: reply.slice(0, 500), channelId: msg.channelId });
-    for (const part of chunk(reply)) await msg.reply(part);
-    return { kind };
+    const fullPrompt = `User ${msg.author.tag} says: ${text}${historyBlock}\n\n${formatMemories(hits)}\n\nNow: UTC ${fmt(nowUtc)}, IST (India) ${fmt(ist)}. You manage todos/reminders with tools: todo_add(text, due?, priority?) saves a todo; todo_list shows them; todo_done(id) completes; remind_add(text, at=ISO datetime) sets a reminder — resolve relative times ("in 15 minutes", "tomorrow 12pm", "at 11pm") against the times above, assume IST unless the user says otherwise, and call the tool immediately in this same reply. Confirm briefly what you saved and when it fires. Daily digest posts automatically at 08:00; due reminders fire on time.\n\nREAL automations (never invent others; offer to run one by exact id):\n${catalog}`.slice(0, 4000);
+    const chatWf = { id: "adhoc-chat", steps: [{ id: "reply", type: "agent", agent: "assistant", prompt: fullPrompt }] };
+    const ctx = await deps.runWorkflow(chatWf, {
+      kind: "discord", text: fullPrompt, user: msg.author.tag, channelId: msg.channelId,
+      messageId: msg.id || null,
+    }, msg.channelId, async (t) => { for (const part of chunk(t)) await msg.reply(part); });
+    saveMemory(cfg.root, { kind: "reply", user: "Rick", text: `Queued chat as job ${ctx?._jobId || ctx?.jobId || "?"}`.slice(0, 500), channelId: msg.channelId });
+    return { kind, jobId: ctx?._jobId || ctx?.jobId || null, status: "queued" };
   }
-  // big-task: plan + run pipeline. Single ack AFTER the plan is built
-  // (no "On it" pre-message) so one goal = one reply + streamed result.
-  const pipeline = await planPipeline(cfg, text, historyBlock);
-  // planner chose an existing automation -> run it directly
+  // big-task: deterministic plan + enqueue pipeline. Single queue-ack AFTER
+  // the plan is built (no "On it" pre-message) so one goal = one reply +
+  // worker result. No direct agent execution in the planner: planPipeline
+  // only builds the doc; deps.runWorkflow enqueues; the worker is the sole
+  // executor.
+  const pipeline = planPipeline(cfg, text, historyBlock);
+  // planner chose an existing automation -> enqueue it (worker runs it)
   if (pipeline.useWorkflow) {
     const wf = (cfg.workflows ?? []).find((w) => w.id === pipeline.useWorkflow);
-    await msg.reply(`▶️ This matches **${wf.id}** — running it…`);
-    const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
     const ctx = await deps.runWorkflow(wf, {
       kind: "discord", command: wf.trigger?.command || wf.id,
       text, user: msg.author.tag, channelId: msg.channelId,
-    }, msg.channelId, replyTo);
-    saveMemory(cfg.root, { kind: "pipeline", user: msg.author.tag, text: `${text} => workflow ${wf.id}`, channelId: msg.channelId });
-    return { kind, pipeline: wf.id, steps: Object.keys(ctx.steps) };
+      messageId: msg.id || null,
+    }, msg.channelId, async (t) => { for (const part of chunk(t)) await msg.reply(part); });
+    saveMemory(cfg.root, { kind: "pipeline", user: msg.author.tag, text: `${text} => workflow ${wf.id} job ${ctx?._jobId || ctx?.jobId || "?"}`, channelId: msg.channelId });
+    return { kind, pipeline: wf.id, jobId: ctx?._jobId || ctx?.jobId || null, status: "queued" };
   }
   const names = pipeline.steps.filter((s) => s.type === "agent").map((s) => s.agent).join(" → ");
-  await msg.reply(`🧩 Task queued: custom pipeline (${names}). Watch the dashboard Tasks tab — progress streams there.`);
+  // Ephemeral pipeline: enqueue as a request job carrying the REAL planned
+  // agents + prompts (never forced to ["assistant"]). Worker runs the chain.
   const ctx = await deps.runWorkflow(pipeline, {
     kind: "discord-pipeline", text, user: msg.author.tag, channelId: msg.channelId,
-  }, msg.channelId);
-  saveMemory(cfg.root, { kind: "pipeline", user: msg.author.tag, text: `${text} => ${names}`, channelId: msg.channelId });
-  return { kind, pipeline: pipeline.id, steps: Object.keys(ctx.steps) };
+    messageId: msg.id || null,
+    agents: pipeline.steps.filter((s) => s.type === "agent").map((s) => s.agent),
+    steps: pipeline.steps,
+  }, msg.channelId, async (t) => { for (const part of chunk(t)) await msg.reply(part); });
+  saveMemory(cfg.root, { kind: "pipeline", user: msg.author.tag, text: `${text} => ${names} job ${ctx?._jobId || ctx?.jobId || "?"}`, channelId: msg.channelId });
+  return { kind, pipeline: pipeline.id, jobId: ctx?._jobId || ctx?.jobId || null, status: "queued" };
 }

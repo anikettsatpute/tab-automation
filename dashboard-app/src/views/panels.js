@@ -71,7 +71,8 @@ export function brainView() {
   const m = b.metrics || {};
   const all = (b.messages || []).filter((x) =>
     !S.brainQ || ((x.messageText || x.text || "") + " " + (x.sender || "") + " " + (x.jobId || x.id || "")).toLowerCase().includes(S.brainQ.toLowerCase()));
-  const msgs = all.slice(0, 40);
+  const limit = S.brainLimit || 30;
+  const msgs = all.slice(0, limit);
   const sel = S.brainSel ? all.find((x) => (x.id || x.jobId) === S.brainSel) || msgs.find((x) => (x.id || x.jobId) === S.brainSel) : null;
   const txt = (x) => x.messageText || x.text || "";
   const ts = (x) => x.receivedAt || x.ts || "";
@@ -87,7 +88,7 @@ export function brainView() {
     { icon: "check-circle-2", label: "Sent", value: m.replied ?? 0, tone: "ok" },
   ])}
   <p class="hint">Last scan: ${esc(b.poller?.lastScan ? String(b.poller.lastScan).slice(0, 19).replace("T", " ") : "—")}</p>
-  ${toolbar(searchBox("brain-q", S.brainQ, "Search message, sender, chat or job ID"))}
+  ${toolbar(searchBox("brain-q", S.brainQ, "Search message, sender, chat or job ID") + `<span class="hint">showing ${msgs.length} of ${all.length}</span>` + (all.length > limit ? `<button type="button" class="btn sm ghost" id="brain-more">Show more (${Math.min(30, all.length - limit)} more)</button>` : ""))}
   <div class="tblwrap"><table class="tbl"><thead><tr><th scope="col">Received</th><th scope="col">Sender / source</th><th scope="col">Incoming message</th><th scope="col">Processing</th><th scope="col">Outbox</th></tr></thead><tbody>
   ${msgs.map((x) => { const id = x.id || x.jobId; return `<tr data-brain="${esc(id)}" style="cursor:pointer;${S.brainSel === id ? "background:var(--acc-soft);" : ""}"><td class="dim">${esc(String(ts(x)).slice(0, 16).replace("T", " "))}</td>
   <td>${esc(x.sender)}<br><span class="hint">${esc(x.source || x.channelId || "discord")}</span></td>
@@ -95,7 +96,7 @@ export function brainView() {
   <td>${pill(st(x) === "failed" ? "failed" : st(x) === "reply_generated" || st(x) === "replied" ? "done" : "running")}<br><span class="hint">${esc(st(x))}</span></td>
   <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5">${emptyState("brain", "No messages", "Discord mentions will land here.")}</td></tr>`}
   </tbody></table></div>
-  ${sel ? `<div class="appr"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx">${icon("x")}</button></div>
+  ${sel ? `<div class="appr" role="dialog" aria-modal="false" aria-label="Brain message details" id="brain-drawer"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx" aria-label="Close message details">${icon("x")}</button></div>
   <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">${icon("terminal")} Session</button></div>
   ${S.brainTab === "details" ? `<div class="grid2"><span>Job ID</span><span class="kbd">${esc(sel.jobId || sel.id || "")}</span><span>Actor ID</span><span class="kbd">${esc(sel.actorId || "—")}</span><span>Conversation</span><span class="kbd">${esc(sel.conversationId || sel.channelId || "—")}</span><span>Updated</span><span>${esc(String(ts(sel)).slice(0, 19).replace("T", " "))}</span></div>
   ${sel.linkedTaskId ? `<p class="dim">Linked work: <span class="kbd">${esc(sel.linkedTaskId)}</span></p>` : ""}
@@ -146,8 +147,22 @@ export function retroView() {
 export function paintRetroChart() {
   try {
     const cv = document.getElementById("retro-chart");
-    if (!cv || !window.Chart) return;
+    if (!cv) return;
     const days = (S.retro?.byDay || []).slice(-14);
+    // Offline-first: pure-CSS bar fallback always renders (no Chart.js needed).
+    // If a bundled Chart.js build is present, enhance to a canvas chart.
+    const host = cv.parentElement;
+    if (host && !host.querySelector(".fbars")) {
+      const max = Math.max(1, ...days.map((d) => Number(d.c) || 0));
+      const fb = document.createElement("div");
+      fb.className = "fbars";
+      fb.setAttribute("role", "img");
+      fb.setAttribute("aria-label", `Delivery velocity: ${days.length} days`);
+      fb.innerHTML = days.map((d) => `<div class="fbar"><span style="height:${Math.max(3, Math.round((Number(d.c) || 0) / max * 72))}px"></span><i>${esc(String(d.d).slice(5))}</i></div>`).join("") || `<p class="hint">No data</p>`;
+      host.appendChild(fb);
+    }
+    if (!window.Chart) return;
+    if (host) { const fb = host.querySelector(".fbars"); if (fb) fb.remove(); }
     if (window._retroChart) window._retroChart.destroy();
     window._retroChart = new window.Chart(cv, {
       type: "bar",
@@ -173,14 +188,17 @@ export function flowsView() {
   ${section("Your flows", (S.flows || []).map((f) => {
     const trig = f.trigger?.type || f.trigger || "manual";
     const preset = trig === "schedule" ? (f.trigger?.preset || f.trigger?.label || `${f.trigger?.timeOfDay || f.trigger?.cron || "Scheduled"}`) : trig === "manual" ? "Manual" : (f.trigger?.rule || "Event");
+    const nextRun = f.state?.next_run_at || f.nextRun || f.next_run_at || null;
+    const dry = S.flowDryResult?.flowId === f.id ? S.flowDryResult : null;
     return `<div class="flowcard"><div class="row"><div><h3>${esc(f.title || f.id)}</h3><p class="dim">${esc(f.description || "")}</p></div><span class="spacer"></span>
-    <button class="btn sm ${f.enabled === false ? "" : "okbtn"}" data-flowen="${esc(f.id)}">${f.enabled === false ? "Enable" : "Enabled"}</button>
-    <button class="btn sm ghost" data-flowdry="${esc(f.id)}">Dry run</button>
+    <button class="btn sm ${f.enabled === false ? "" : "okbtn"}" data-flowen="${esc(f.id)}" aria-pressed="${f.enabled !== false}">${f.enabled === false ? "Enable" : "Enabled"}</button>
+    <button class="btn sm ghost" data-flowdry="${esc(f.id)}" ${S.flowDryBusy ? "disabled" : ""}>${S.flowDryBusy && S.flowDryResult?.flowId === f.id ? "Simulating…" : "Dry run"}</button>
     <button class="btn sm primary" data-runflow="${esc(f.id)}">▶ Run</button>
     <button class="btn sm ghost" data-flowedit="${esc(f.id)}">✎ Edit</button>
     <button class="btn sm danger" data-flowdel="${esc(f.id)}">🗑</button></div>
   <div class="row"><span class="kbd">${esc(preset)}</span><span class="kbd">${esc(f.configFileName || f.id + ".json")}</span>
-  ${f.state?.next_run_at ? `<span class="hint">Next: ${esc(String(f.state.next_run_at).slice(0, 16).replace("T", " "))}</span>` : ""}<span class="hint">last: ${esc(f.state?.last_status || f.lastStatus || "never")}</span></div>
+  ${nextRun ? `<span class="hint">Next: ${esc(String(nextRun).slice(0, 16).replace("T", " "))} (backend-computed)</span>` : trig === "schedule" ? `<span class="hint">Next: not reported by backend yet</span>` : ""}<span class="hint">last: ${esc(f.state?.last_status || f.lastStatus || "never")}</span></div>
+  ${dry ? (dry.error ? `<div class="status bad" role="alert">Dry run failed: ${esc(dry.error)}</div>` : `<div class="notice ok" role="status">Dry run trace (${esc(String(dry.steps?.length ?? 0))} steps, no side-effects): ${(dry.steps || []).map((s) => esc(typeof s === "string" ? s : (s.wouldDo || s.title || s.step || s.id || s.type))).join(" → ") || "empty"}${dry.note ? ` · ${esc(dry.note)}` : ""}</div>`) : ""}
   <div class="pipe">${(f.steps || []).map((s, i) => `<div class="pnode"><b>${esc(s.title || s.id || s.type)}</b><span>${esc(s.type || "")}</span></div>${i < (f.steps || []).length - 1 ? `<span class="arr">→</span>` : ""}`).join("")}</div></div>`;
   }).join("") || emptyState("workflow", "No flows", "Start from a template above."))}
   ${ed ? `<div class="modal"><div class="mbox wide"><div class="dhead"><b>Edit flow '${esc((ed.configFileName || ed.id || "new").replace(".json", ""))}'</b><span class="spacer"></span><button class="btn ghost sm" id="flowx">✕</button></div>
@@ -192,7 +210,7 @@ export function flowsView() {
   <div class="row"><label class="fld"><span>Time of day</span><input id="flow-time" value="${esc(S.flowTime)}"></label>
   <label class="fld"><span>Days</span><div class="row">${["Every day", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<button class="btn sm ${S.flowDays.includes(d) ? "on" : "ghost"}" data-fday="${d}">${d}</button>`).join("")}</div></label></div>
   <p class="hint">🕒 ${esc(S.flowDays.join(", "))} at ${esc(S.flowTime)} · Next run: ${esc(nextRunHint())} · cron <span class="kbd">${esc(S.flowCron || "(auto)")}</span> · <button class="btn sm ghost" id="flowcron">Edit cron</button></p></div>` : ""}
-  ${S.flowTrig === "event" ? `<label class="fld"><span>Event rule (e.g. on task blocked, on brain failed)</span><input id="flow-rule" value="${esc(S.flowRule || "")}" placeholder="on task blocked"></label>` : ""}
+  ${S.flowTrig === "event" ? `<label class="fld"><span>Event rule (e.g. on task blocked, on brain failed)</span><input id="flow-rule" value="${esc(S.flowRule || "")}" placeholder="on task blocked"></label><p class="hint">Event triggers fire only if the backend implements a matching event contract — otherwise the flow stays manual. No silent success.</p>` : ""}
   <div class="row"><h4>STEPS (${(ed.steps || []).length} steps)</h4><span class="spacer"></span><button class="btn sm ghost" id="flowexpand">Expand all</button></div>
   <div class="palette"><span class="hint">Add step:</span>${[["run_agent", "Run agent"], ["create_task", "Create task"], ["file_request", "File request"], ["notify", "Notify"], ["condition", "Condition"], ["run_automation", "Run automation"], ["wait", "Wait"]].map(([t, l]) => `<button class="btn sm ghost" data-fadd="${t}">${l}</button>`).join("")}</div>
   ${(ed.steps || []).map((s, i) => `<div class="stepcard"><div class="row"><span class="kbd">▶ ${i + 1}.</span><b>${esc(s.title || s.id || s.type)}</b><span class="kbd">${esc(s.type)}</span><span class="spacer"></span><button class="btn sm ghost" data-fup="${i}" title="Move up">^</button><button class="btn sm ghost" data-fdown="${i}" title="Move down">∨</button><button class="btn sm danger" data-fdel="${i}" title="Delete">🗑</button></div>
@@ -228,6 +246,7 @@ export function todosView() {
   ${S.todoForm ? `<div class="appr" role="dialog" aria-label="New TODO"><label class="fld"><span>TODO text</span><input id="todo-title" placeholder="What needs to be done?"></label><div class="row"><button type="button" class="btn sm primary" id="todocreate">${icon("plus")} Add TODO</button><button type="button" class="btn sm ghost" id="todocancel">Cancel</button></div></div>` : ""}
   ${toolbar(searchBox("todo-q", S.todoQ, "Search TODOs") + selectBox("todo-src", [["all", "All sources"], ["flow:", "Flows"], ["manual", "Manual"]], S.todoSource, "Filter by source"))}
   ${list.slice(0, 30).map((t) => `<div class="appr"><div class="row">${pill(t.status === "open" ? "queued" : t.status)}<span class="tag">${esc(t.priority)}</span><span>${esc(t.text)}</span><span class="spacer"></span><span class="hint">${esc(t.id)} · ${esc(String(t.created_at || "").slice(0, 10))}</span></div>
+  ${t.requestId || t.request_id ? `<p class="hint">Converted → request <button type="button" class="kbd" data-goto-req="${esc(t.requestId || t.request_id)}">${esc(t.requestId || t.request_id)}</button></p>` : ""}
   <div class="row">${t.status === "open" ? `<button type="button" class="btn sm ghost" data-tdone="${esc(t.id)}">${icon("check")} Done</button><button type="button" class="btn sm ghost" data-tdis="${esc(t.id)}">${icon("archive")} Dismiss</button><button type="button" class="btn sm" data-tconv="${esc(t.id)}">${icon("arrow-right")} Convert to request</button>` : pill(t.status)}</div></div>`).join("") || emptyState("list-checks", "No TODOs", "They appear here when created manually or discovered by inbox sweepers.")}
   <div class="chatbox"><label class="sr" for="todo-in">Quick add TODO</label><input id="todo-in" placeholder="+ new todo…"><button type="button" class="btn sm primary" id="todo-add">${icon("plus")} Add</button></div></div>`;
 }
@@ -252,9 +271,15 @@ export function reqModal() {
   <label class="fld"><span>Pipeline (user-configured agent → agent)</span><select id="req-pipe"><option value="">— divider picks —</option>${streamPipes(S.reqStream).map((p) => `<option value="${esc(p.id)}" ${S.reqPipeline === p.id ? "selected" : ""}>${esc(p.name || p.id)} (${esc((p.agents || []).join(" → "))})</option>`).join("")}</select></label></div>
   <label class="fld"><span>Agents (pipeline — each step spawns a Muse session)</span><div class="row">${AGENT_OPTS.map((a) => `<button class="btn sm ${S.reqAgents.includes(a) ? "primary" : "ghost"}" data-reqagent="${a}">${a}</button>`).join("")}</div></label>
   <p class="hint">Stream <b>${esc(streamName(S.reqStream))}</b> · Pipeline: <b>${S.reqMode === "direct" ? esc(S.reqAgents.join(" → ") || "—") : "Divider picks stream + agents from goal"}</b> · sessions write JSON, loop reconciles to DB.</p>
-  <label class="fld"><span>Attach files (screenshots, logs — names only, stored alongside run)</span><input id="req-files" placeholder="e.g. screenshot.png, trace.log"></label>
-  ${S.reqMsg ? `<p class="hint">${esc(S.reqMsg)}</p>` : ""}
-  <div class="row"><button class="btn primary" id="req-go" ${S.reqBusy ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : "Enqueue Task"}</button></div></div></div>`;
+  <div class="appr" aria-label="Divider preview"><b>${icon("git-branch")} Pipeline preview</b><p class="hint" style="margin:4px 0 0">${S.reqMode === "direct" ? esc((S.reqAgents || []).join(" → ") || "Select at least one agent.") : "Divider preview: goal → stream + ordered agents (no enqueue until you confirm)."}</p></div>
+  <div class="appr" aria-label="Attachments (text-only)"><b>${icon("paperclip")} Attachments (text-only).</b>
+  <p class="hint" style="margin:4px 0 0">${esc(S.reqAttachNote)}</p>
+  <div class="row" style="margin-top:6px"><label class="btn sm ghost" for="req-file">Choose file</label>
+  <input id="req-file" type="file" class="sr" accept=".txt,.md,.json,.csv,text/plain,text/markdown,text/csv,application/json" ${S.reqAttachBusy ? "disabled" : ""}>
+  <span class="hint" id="req-attach-status" role="status">${S.reqAttachBusy ? "Uploading…" : S.reqAttachErr ? esc(S.reqAttachErr) : `${(S.reqAttachments || []).length} file(s) staged`}</span></div>
+  <div id="req-attach-list">${(S.reqAttachments || []).map((a) => `<div class="row"><span class="kbd">${esc(a.name)}</span><span class="hint">${a.size} bytes</span><span class="spacer"></span><button type="button" class="btn sm ghost" data-reqdel="${esc(a.id)}" ${S.reqAttachBusy ? "disabled" : ""}>Remove</button></div>`).join("") || `<p class="hint">No files staged. Uploads stay in this browser session until you enqueue.</p>`}</div></div>
+  <p class="hint" id="req-msg" role="status">${esc(S.reqMsg || "")}</p>
+  <div class="row"><button class="btn primary" id="req-go" ${(S.reqBusy || S.reqAttachBusy || S.reqAttachErr) ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : S.reqAttachBusy ? "Uploading…" : "Enqueue Task"}</button><span class="hint">Long runs return 202 + job id; the board polls until completion.</span></div></div></div>`;
 }
 
 // ---------- render (focus-preserving: skip re-render while typing or modal open) ----------

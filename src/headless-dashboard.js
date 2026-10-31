@@ -21,21 +21,56 @@ import { registerLoopTaskRoutes } from "./routes/loop-tasks.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerRequestRoutes } from "./routes/requests.js";
 import { registerAutomationRoutes } from "./routes/automations.js";
+import { registerJobRoutes } from "./routes/jobs.js";
+import { registerEventRoutes } from "./routes/events.js";
 
-const root = process.cwd();
+const DEFAULT_ROOT = process.cwd();
 
-export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
-  let dashCfg = { enabled: true, refreshSec: 3 };
-  try { dashCfg = getDashboardConfig(root, loadJson); } catch { /* defaults */ }
-  if (!dashCfg.enabled) {
-    log("[dashboard] disabled via config/dashboard.json — skipping HTTP server");
-    return null;
-  }
+export function createHeadlessApp(cfg, { root = cfg?.root || DEFAULT_ROOT, log = console.log } = {}) {
   const app = new Hono();
   const distDash = path.join(root, "dist-dashboard");
   const ctx = { root, cfg, log };
 
-  app.get("/api/dashboard/config", (c) => c.json(dashCfg));
+  // Public, harmless endpoints: health + static Control Room shell (the HTML
+  // itself carries no data; the browser login form posts CONTROL_TOKEN to
+  // /api/control/login, which mints a same-origin HttpOnly session cookie).
+  app.get("/api/health", (c) => c.json({
+    ok: true, at: new Date().toISOString(), service: "headless",
+    workflows: (cfg.workflows || []).length, agents: cfg.agents ? [...cfg.agents.keys()].length : 0,
+  }));
+
+  // Central access middleware: every /api/control/* route (ALL methods —
+  // private reads included) plus the private /api/feed + /api/dashboard reads
+  // require auth. Public reads stay open: /api/health, /api/dashboard/config
+  // (refresh cadence only), /api/dashboard (tool/workflow inventory, no runs).
+  // Login/logout are explicitly public (they ARE the auth handshake).
+  app.use(async (c, next) => {
+    const p = c.req.path;
+    if (c.req.method === "OPTIONS") return next();
+    // Public handshake: login/logout mint/revoke sessions; auth/status tells
+    // the browser login form whether a token is configured and whether this
+    // request is local (no secrets in the response).
+    if (p === "/api/control/login" || p === "/api/control/logout" || p === "/api/control/auth/status") return next();
+    const isPrivate =
+      p === "/api/control" || p.startsWith("/api/control/") ||
+      p === "/api/feed" || p.startsWith("/api/feed/") ||
+      p === "/api/dashboard" || p.startsWith("/api/dashboard/");
+    if (!isPrivate) return next();
+    // /api/dashboard/config is the public refresh-cadence doc; the run feed
+    // /api/dashboard (inventory + recent runs) stays private.
+    if (p === "/api/dashboard/config") return next();
+    const { requireAuth } = await import("./services/access.js");
+    const g = requireAuth(c);
+    if (!g.ok) return c.json({ error: g.error, authRequired: true, via: null }, g.status);
+    c.set("authVia", g.via);
+    return next();
+  });
+
+  app.get("/api/dashboard/config", (c) => {
+    let dashCfg = { enabled: true, refreshSec: 3 };
+    try { dashCfg = getDashboardConfig(root, loadJson); } catch { /* defaults */ }
+    return c.json(dashCfg);
+  });
 
   app.get("/api/dashboard", (c) => {
     try {
@@ -99,6 +134,17 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
     ok: true, at: new Date().toISOString(), service: "headless",
     workflows: (cfg.workflows || []).length, agents: cfg.agents ? [...cfg.agents.keys()].length : 0,
   }));
+  // Auth status: public, no secrets. Tells the browser login form whether a
+  // token is configured and whether this request is local (local browsers
+  // can mint a session without typing the token; remote browsers must).
+  // Also reports whether THIS request already carries a valid session so an
+  // authed remote browser doesn't get stuck at the gate.
+  app.get("/api/control/auth/status", async (c) => {
+    const { tokenRequired, isLoopback, hasValidSession } = await import("./services/access.js");
+    const local = isLoopback(c);
+    const authed = local || hasValidSession(c);
+    return c.json({ ok: true, tokenRequired: tokenRequired(), local, authed, via: c.get("authVia") || null });
+  });
 
   // Route modules — one file per surface, shared ctx { root, cfg, log }.
   registerConfigRoutes(app, ctx);
@@ -106,8 +152,41 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
   registerTaskRoutes(app, ctx);
   registerRequestRoutes(app, ctx);
   registerAutomationRoutes(app, ctx);
+  registerJobRoutes(app, ctx);
+  registerEventRoutes(app, ctx);
+
+  return { app, root, cfg, log };
+}
+
+export async function startHeadlessDashboard(cfg, { log = console.log, worker = true } = {}) {
+  const root = cfg?.root || DEFAULT_ROOT;
+  let dashCfg = { enabled: true, refreshSec: 3 };
+  try { dashCfg = getDashboardConfig(root, loadJson); } catch { /* defaults */ }
+  if (!dashCfg.enabled) {
+    log("[dashboard] disabled via config/dashboard.json — skipping HTTP server");
+    return null;
+  }
+  const { app } = createHeadlessApp(cfg, { root, log });
+
+  // Worker lifecycle: durable queue claims + startup/periodic scanner.
+  // Started with the dashboard so Control Room launches always make progress.
+  // Pass { worker: false } for isolated browser/test runs without the bot.
+  if (worker) {
+    try {
+      const { startWorker } = await import("./services/worker.js");
+      // Pass through live deps (notably sendDiscord) so worker
+      // discord_send steps + completion delivery use the real client.
+      // startHeadlessDashboard callers pass { sendDiscord } via cfg deps.
+      const wdeps = { log };
+      if (cfg?.sendDiscord && typeof cfg.sendDiscord === "function") wdeps.sendDiscord = cfg.sendDiscord;
+      startWorker(cfg, wdeps);
+    } catch (err) {
+      log(`[dashboard] worker start skipped: ${err.message}`);
+    }
+  }
 
   // static Control Room build
+  const distDash = path.join(root, "dist-dashboard");
   app.get("/dashboard/assets/:file", (c) => {
     const file = path.join(distDash, "assets", c.req.param("file"));
     if (!existsSync(file)) return c.json({ error: "not found" }, 404);
@@ -128,8 +207,12 @@ export function startHeadlessDashboard(cfg, { log = console.log } = {}) {
   app.get("/", (c) => c.redirect("/dashboard"));
 
   const PORT = Number(process.env.HEADLESS_PORT || process.env.DASHBOARD_PORT || 3001);
-  serve({ fetch: app.fetch, port: PORT }, () => {
+  const server = serve({ fetch: app.fetch, port: PORT }, () => {
     log(`[dashboard] headless Control Room: http://localhost:${PORT}/dashboard`);
   });
-  return { port: PORT };
+  const close = async () => {
+    try { const { stopWorker } = await import("./services/worker.js"); stopWorker(); } catch { /* ignore */ }
+    await new Promise((resolve) => server.close(resolve));
+  };
+  return { app, port: PORT, server, close };
 }

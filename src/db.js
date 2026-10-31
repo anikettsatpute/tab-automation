@@ -4,7 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -182,7 +182,7 @@ CREATE INDEX IF NOT EXISTS idx_brain_status ON brain_messages(processing_status)
 -- Agent sessions (reference: PRD 4.4 Sessions tab, IMPLEMENTATION 2.2 agentSessions) --
 CREATE TABLE IF NOT EXISTS agent_sessions (
   id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
   step_number INTEGER NOT NULL DEFAULT 0,
   session_uuid TEXT NOT NULL DEFAULT '',
   runner_type TEXT NOT NULL DEFAULT 'tab-automation',
@@ -250,6 +250,61 @@ CREATE TABLE IF NOT EXISTS configurations (
   value TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
+-- Durable job queue (reference: upgrade plan Phase 1 — fast 202 launch) --
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'request',
+  payload TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempt INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  run_id TEXT,
+  task_id TEXT,
+  idempotency_key TEXT,
+  worker_id TEXT,
+  lease_until TEXT,
+  cancel_requested INTEGER NOT NULL DEFAULT 0,
+  result_hash TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idem ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+-- Session attempts: assignment validation + DB transaction hash dedupe --
+CREATE TABLE IF NOT EXISTS session_attempts (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL DEFAULT '',
+  run_id TEXT NOT NULL DEFAULT '',
+  step_index INTEGER NOT NULL DEFAULT 0,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  agent TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL DEFAULT '',
+  result_path TEXT NOT NULL DEFAULT '',
+  result_hash TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'running',
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_hash ON session_attempts(result_hash) WHERE result_hash != '';
+CREATE INDEX IF NOT EXISTS idx_attempt_run ON session_attempts(run_id, step_index);
+-- Audit log: mutation trail (reference: upgrade plan Phase 9) --
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  target TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+-- Outbox dedupe marker --
+CREATE TABLE IF NOT EXISTS outbox_dedupe (
+  key TEXT PRIMARY KEY,
+  outbox_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 `;
 
 let _db = null;
@@ -271,19 +326,52 @@ export function openDb(root, { file = null, readOnly = false } = {}) {
   if (!readOnly) {
     _db.exec("PRAGMA journal_mode = WAL;");
     _db.exec(SCHEMA);
-    // migrate old DBs: add control-plane + PRD columns if missing
-    try {
-      const cols = new Set(_db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name));
-      for (const [col, def] of [["agent", "TEXT"], ["model", "TEXT"], ["tokens", "INTEGER NOT NULL DEFAULT 0"], ["cost", "REAL NOT NULL DEFAULT 0"], ["tool_calls", "INTEGER NOT NULL DEFAULT 0"],
-        ["title", "TEXT"], ["repository", "TEXT"], ["branch", "TEXT"], ["task_type", "TEXT"], ["progress_done", "INTEGER NOT NULL DEFAULT 0"], ["progress_total", "INTEGER NOT NULL DEFAULT 0"],
-        ["pr_url", "TEXT"], ["comments_count", "INTEGER NOT NULL DEFAULT 0"], ["blocked_reason", "TEXT"], ["end_goal", "TEXT"]]) {
-        if (!cols.has(col)) _db.exec(`ALTER TABLE runs ADD COLUMN ${col} ${def}`);
-      }
-    } catch { /* fresh DB already has them */ }
+    migrateDb(_db);
   }
   _root = root;
   _file = target;
   return _db;
+}
+
+/** Additive migrations for pre-existing DBs (never DROP, never rewrite). */
+export function migrateDb(db) {
+  try {
+    const cols = new Set(db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name));
+    for (const [col, def] of [["agent", "TEXT"], ["model", "TEXT"], ["tokens", "INTEGER NOT NULL DEFAULT 0"], ["cost", "REAL NOT NULL DEFAULT 0"], ["tool_calls", "INTEGER NOT NULL DEFAULT 0"],
+      ["title", "TEXT"], ["repository", "TEXT"], ["branch", "TEXT"], ["task_type", "TEXT"], ["progress_done", "INTEGER NOT NULL DEFAULT 0"], ["progress_total", "INTEGER NOT NULL DEFAULT 0"],
+      ["pr_url", "TEXT"], ["comments_count", "INTEGER NOT NULL DEFAULT 0"], ["blocked_reason", "TEXT"], ["end_goal", "TEXT"]]) {
+      if (!cols.has(col)) db.exec(`ALTER TABLE runs ADD COLUMN ${col} ${def}`);
+    }
+  } catch { /* fresh DB already has them */ }
+  // Additive tables for the durable queue (safe on old DBs: CREATE IF NOT EXISTS).
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'request', payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'queued', attempt INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3,
+      run_id TEXT, task_id TEXT, idempotency_key TEXT, worker_id TEXT, lease_until TEXT,
+      cancel_requested INTEGER NOT NULL DEFAULT 0, result_hash TEXT, error TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
+    )`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idem ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at)`);
+    db.exec(`CREATE TABLE IF NOT EXISTS session_attempts (
+      id TEXT PRIMARY KEY, job_id TEXT NOT NULL DEFAULT '', run_id TEXT NOT NULL DEFAULT '',
+      step_index INTEGER NOT NULL DEFAULT 0, attempt INTEGER NOT NULL DEFAULT 1,
+      agent TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL DEFAULT '', result_path TEXT NOT NULL DEFAULT '',
+      result_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'running', created_at TEXT NOT NULL
+    )`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_hash ON session_attempts(result_hash) WHERE result_hash != ''`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_attempt_run ON session_attempts(run_id, step_index)`);
+    db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '',
+      target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    )`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`);
+    db.exec(`CREATE TABLE IF NOT EXISTS outbox_dedupe (
+      key TEXT PRIMARY KEY, outbox_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    )`);
+  } catch { /* best effort */ }
 }
 
 export function closeDb() {
@@ -846,14 +934,43 @@ export function deleteTask(root, runId) {
   return r.changes > 0;
 }
 
-/** Restart budget (reference: PRD §6.3 max 6 attempts). Counts prior requeue runs for a task. */
+/** Restart budget (reference: PRD §6.3 max 6 attempts). Counts the exact
+ *  structured parentRun references for a task — never LIKE matching (which
+ *  over-counts substring run ids). Falls back to exact JSON scan. */
 export function requeueCount(root, runId) {
   const db = openDb(root);
   try {
-    return db.prepare(
-      "SELECT COUNT(*) c FROM runs WHERE trigger_json LIKE ?"
-    ).get(`%${runId}%`).c || 0;
+    const rows = db.prepare("SELECT trigger_json FROM runs").all();
+    let n = 0;
+    for (const r of rows) {
+      try {
+        const t = JSON.parse(r.trigger_json || "{}");
+        if (t.parentRun === runId) n++;
+      } catch { /* ignore unparseable */ }
+    }
+    return n;
   } catch { return 0; }
+}
+
+/** Flush queued outbox rows via the real sendDiscord. Deduped queueing stays
+ *  in queueOutboxDeduped; this is the worker-side delivery pass that replaces
+ *  fake success no-op notifications. Returns { sent, failed }. */
+export async function flushOutbox(root, sendDiscord, { limit = 20 } = {}) {
+  const db = openDb(root);
+  const rows = db.prepare("SELECT * FROM outbox WHERE status = 'queued' ORDER BY created_at LIMIT ?").all(limit);
+  let sent = 0, failed = 0;
+  for (const row of rows) {
+    try {
+      await sendDiscord(row.channel || undefined, row.text);
+      db.prepare("UPDATE outbox SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'queued'").run(now(), row.id);
+      sent++;
+    } catch (err) {
+      try { db.prepare("UPDATE outbox SET status = 'failed' WHERE id = ? AND status = 'queued'").run(row.id); } catch { /* best effort */ }
+      try { writeLog(root, { level: "error", source: "outbox", message: `outbox ${row.id} send failed: ${String(err.message).slice(0, 200)}`, runId: row.run_id }); } catch { /* best effort */ }
+      failed++;
+    }
+  }
+  return { sent, failed };
 }
 
 // ---- task comments (reference: Sweep PR comments -> activity) ----
@@ -946,4 +1063,155 @@ export function dismissTodo(root, id) {
 
 export function getTodo(root, id) {
   return openDb(root).prepare("SELECT * FROM todos WHERE id = ?").get(id);
+}
+
+// ---- durable jobs: thin wrappers over src/services/jobs.js (single DB handle) ----
+export function enqueueJob(root, opts) {
+  const db = openDb(root);
+  return import("./services/jobs.js").then((m) => m.enqueueJob(root, db, opts));
+}
+export function enqueueJobSync(root, opts) {
+  const db = openDb(root);
+  // Sync route-handler path: mirrors src/services/jobs.js enqueueJob
+  // (valid-JSON payload, idempotency actor+operation+scope conflict detection).
+  const { kind, payload = {}, idempotencyKey = null, maxAttempts = 3, runId = null, taskId = null, actor = "", scope = "" } = opts || {};
+  const allowed = new Set(["request", "loop-task", "automation", "requeue", "chat"]);
+  if (!allowed.has(kind)) throw new Error(`unknown job kind '${kind}'`);
+  const body = safePayloadStringifyLocal(payload);
+  const hash = createHash("sha256").update(body).digest("hex").slice(0, 32);
+  const key = idempotencyKey ? `${String(actor || "anon").slice(0, 60)}:${String(scope || kind).slice(0, 60)}:${String(idempotencyKey).slice(0, 120)}` : null;
+  if (key) {
+    const prior = db.prepare("SELECT * FROM jobs WHERE idempotency_key = ?").get(key);
+    if (prior) {
+      if (prior.kind !== kind) throw new Error(`idempotency conflict: key '${key}' already used for kind '${prior.kind}'`);
+      if (createHash("sha256").update(prior.payload || "{}").digest("hex").slice(0, 32) !== hash) throw new Error(`idempotency conflict: key '${key}' reused with different payload`);
+      return { id: prior.id, deduped: true, job: prior };
+    }
+  }
+  const id = randomUUID().slice(0, 8);
+  const t = now();
+  db.prepare(
+    "INSERT INTO jobs (id, kind, payload, status, attempt, max_attempts, run_id, task_id, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?)"
+  ).run(id, kind, body, Math.max(1, Math.min(6, Number(maxAttempts) || 3)), runId, taskId, key, t, t);
+  return { id, deduped: false, job: db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) };
+}
+function safePayloadStringifyLocal(payload, maxBytes = 16000) {
+  // Reject oversized payloads (no truncation of execution intent).
+  const full = JSON.stringify(payload ?? {});
+  if (full.length <= maxBytes) return full;
+  throw new Error(`payload too large: ${full.length} bytes > ${maxBytes} max — split the goal or shorten the prompt (no truncation of execution intent)`);
+}
+export function getJobRow(root, id) {
+  return openDb(root).prepare("SELECT * FROM jobs WHERE id = ?").get(id) || null;
+}
+export function listJobRows(root, { status = null, kind = null, limit = 50 } = {}) {
+  const db = openDb(root);
+  if (status && kind) return db.prepare("SELECT * FROM jobs WHERE status = ? AND kind = ? ORDER BY created_at DESC LIMIT ?").all(status, kind, limit);
+  if (status) return db.prepare("SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(status, limit);
+  if (kind) return db.prepare("SELECT * FROM jobs WHERE kind = ? ORDER BY created_at DESC LIMIT ?").all(kind, limit);
+  return db.prepare("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?").all(limit);
+}
+export function requestJobCancel(root, id) {
+  const db = openDb(root);
+  const t = now();
+  const r = db.prepare("UPDATE jobs SET cancel_requested = 1, updated_at = ? WHERE id = ? AND status IN ('queued','leased','running')").run(t, id);
+  if (r.changes === 0) return false;
+  // Cancelling a queued job finishes it as cancelled immediately — it must
+  // never be leased afterwards. Leased/running jobs keep their status so the
+  // worker can observe the flag mid-flight and terminalize (cancel wins).
+  try {
+    db.prepare("UPDATE jobs SET status = 'cancelled', error = 'cancel requested', finished_at = ?, updated_at = ? WHERE id = ? AND status = 'queued' AND cancel_requested = 1").run(t, t, id);
+  } catch {}
+  return true;
+}
+export function isJobCancelRequested(root, id) {
+  const row = openDb(root).prepare("SELECT cancel_requested FROM jobs WHERE id = ?").get(id);
+  return row ? Number(row.cancel_requested) === 1 : false;
+}
+
+// ---- session attempts: assignment validation + hash dedupe in a transaction ----
+// Atomic: the INSERT and the dedupe check happen inside one IMMEDIATE
+// transaction, so two concurrent workers cannot both claim the same
+// (run_id, step_index, attempt) or the same result_hash. Assignment is
+// validated: resultPath must live under data/responses/<runId>/ and the
+// sessionId must match the claiming job's session.
+export function claimSessionAttempt(root, { jobId = "", runId = "", stepIndex = 0, attempt = 1, agent = "", model = "", sessionId = "", resultPath = "", resultHash = "" }) {
+  const db = openDb(root);
+  const id = randomUUID().slice(0, 8);
+  const t = now();
+  const safeRun = String(runId || "adhoc");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(safeRun)) throw new Error(`unsafe runId: ${safeRun.slice(0, 80)}`);
+  if (resultPath) {
+    const rp = String(resultPath);
+    const want = `data/responses/${safeRun}/`;
+    if (!rp.includes(want) && !rp.endsWith(`data/responses/${safeRun}`)) throw new Error(`resultPath outside run dir: ${rp.slice(0, 120)}`);
+    if (rp.includes("..")) throw new Error(`resultPath traversal refused`);
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const taken = db.prepare("SELECT id FROM session_attempts WHERE run_id = ? AND step_index = ? AND attempt = ?").get(safeRun, Number(stepIndex) || 0, Number(attempt) || 1);
+    if (taken) { db.exec("ROLLBACK"); return { id: null, deduped: true, error: `slot already claimed (attempt ${taken.id})` }; }
+    if (resultHash) {
+      const dup = db.prepare("SELECT id FROM session_attempts WHERE result_hash = ?").get(resultHash);
+      if (dup) { db.exec("ROLLBACK"); return { id: null, deduped: true, error: `duplicate result hash (attempt ${dup.id})` }; }
+    }
+    db.prepare(
+      "INSERT INTO session_attempts (id, job_id, run_id, step_index, attempt, agent, model, session_id, result_path, result_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)"
+    ).run(id, String(jobId).slice(0, 16), safeRun.slice(0, 16), Number(stepIndex) || 0, Number(attempt) || 1,
+      String(agent).slice(0, 80), String(model).slice(0, 80), String(sessionId).slice(0, 64),
+      String(resultPath).slice(0, 500), String(resultHash).slice(0, 64), t);
+    db.exec("COMMIT");
+    return { id, deduped: false };
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch {}
+    if (/UNIQUE constraint failed/i.test(String(err.message || ""))) return { id: null, deduped: true, error: String(err.message).slice(0, 200) };
+    throw err;
+  }
+}
+export function finishSessionAttempt(root, id, { status = "done", resultHash = "" } = {}) {
+  const db = openDb(root);
+  if (id) db.prepare("UPDATE session_attempts SET status = ?, result_hash = COALESCE(NULLIF(?, ''), result_hash) WHERE id = ?").run(String(status).slice(0, 20), String(resultHash || ""), id);
+}
+export function listSessionAttempts(root, runId) {
+  return openDb(root).prepare("SELECT * FROM session_attempts WHERE run_id = ? ORDER BY step_index, attempt").all(runId);
+}
+
+// ---- audit log ----
+export function audit(root, { actor = "", action = "", target = "", detail = "" } = {}) {
+  try {
+    openDb(root).prepare("INSERT INTO audit_log (actor, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(String(actor).slice(0, 120), String(action).slice(0, 120), String(target).slice(0, 200), String(detail ?? "").slice(0, 2000), now());
+  } catch { /* best effort */ }
+}
+export function listAudit(root, { limit = 100 } = {}) {
+  return openDb(root).prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?").all(limit);
+}
+
+// ---- outbox dedupe: same channel+text returns existing queued id ----
+export function queueOutboxDeduped(root, { channel = "", text = "", runId = null, windowSec = 3600 } = {}) {
+  const db = openDb(root);
+  const ch = String(channel || "").slice(0, 200);
+  const tx = String(text || "").slice(0, 4000);
+  const key = `outbox:${ch}:${shaKey(ch, tx)}`;
+  const since = new Date(Date.now() - Number(windowSec || 3600) * 1000).toISOString();
+  try {
+    const prior = db.prepare("SELECT outbox_id FROM outbox_dedupe WHERE key = ?").get(key);
+    if (prior) {
+      const row = db.prepare("SELECT * FROM outbox WHERE id = ?").get(prior.outbox_id);
+      if (row && row.status === "queued" && row.created_at >= since) return { id: row.id, deduped: true };
+    }
+  } catch { /* fall through to insert */ }
+  const id = queueOutbox(root, { channel: ch, text: tx, runId });
+  try {
+    db.prepare("INSERT INTO outbox_dedupe (key, outbox_id, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET outbox_id = excluded.outbox_id, created_at = excluded.created_at")
+      .run(key, id, now());
+  } catch { /* best effort */ }
+  return { id, deduped: false };
+}
+
+function shaKey(...parts) {
+  let h = 0x811c9dc5;
+  const s = parts.join("::");
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16);
 }

@@ -32,6 +32,27 @@ export const MUSE_MODELS = [
 
 export const MUSE_DEFAULT_MODEL = "muse-spark-1.3";
 
+export function resolveMuseApiKey(cfg, agentOrId) {
+  const agent = typeof agentOrId === "string" ? cfg?.agents?.get?.(agentOrId) : agentOrId;
+  const providers = new Map((cfg?.providers ?? []).map((p) => [p.id, p]));
+  const providerId = agent?.provider || cfg?.defaultProvider || "muse";
+  const pr = providers.get(providerId);
+  const keyEnv = pr?.keyEnv || KEY_ENV.muse;
+  const fromEnv = (process.env[keyEnv] ?? "").trim();
+  if (fromEnv) return { key: fromEnv, keyEnv };
+  const cfgKey = String(cfg?.museKey ?? "").trim();
+  if (cfgKey) return { key: cfgKey, keyEnv };
+  if (keyEnv !== KEY_ENV.muse) {
+    const std = (process.env[KEY_ENV.muse] ?? "").trim();
+    if (std) return { key: std, keyEnv: KEY_ENV.muse };
+  }
+  return { key: "", keyEnv };
+}
+
+export function museApiKeyStdinArgs(key) {
+  return key ? ["--api-key-stdin"] : [];
+}
+
 export function loadProviders(root) {
   const p = path.join(root, "config", "providers.json");
   if (!existsSync(p)) return { providers: [] };

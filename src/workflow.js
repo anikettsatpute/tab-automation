@@ -98,7 +98,12 @@ export function chunk(text, size = MAX_DISCORD) {
   return out;
 }
 
-export async function runWorkflow(cfg, deps, workflow, triggerCtx = {}) {
+export async function runWorkflow(cfg, deps, workflow, triggerCtx = {}, opts = {}) {
+  // Unified runner entry: preserves the worker's _jobId preclaim contract.
+  // When invoked from the worker (opts.jobId set), the run links to that job
+  // (ctx._jobId) so completion/failure reconciles to the SAME job row —
+  // never a stray run with a fake 'Done'. Direct (non-worker) calls still
+  // create standalone runs as before.
   const ctx = {
     now: new Date().toISOString(),
     date: new Date().toISOString().slice(0, 10),
@@ -106,13 +111,24 @@ export async function runWorkflow(cfg, deps, workflow, triggerCtx = {}) {
     steps: {},
     workflow: workflow.id,
     _depth: triggerCtx._depth ?? 0,
+    _cancelCheck: typeof opts.cancelCheck === "function" ? opts.cancelCheck : null,
+    _jobId: opts.jobId || triggerCtx?.jobId || triggerCtx?._jobId || null,
+    // Worker DI: when set, agent steps run through the durable executor
+    // (envelopes/claims/reconciler) instead of direct dispatch.
+    _agentExecutor: typeof opts.executeAgentStep === "function" ? opts.executeAgentStep : null,
+    _stepBase: Number.isFinite(Number(opts.stepBase)) ? Math.max(0, Math.trunc(Number(opts.stepBase))) : 0,
   };
-  let runId = null;
+  // Worker path reuses its pre-created run (opts.runId) so the job row,
+  // run row, and session_attempt slots stay bound to the SAME run — never
+  // a stray run with a fake 'Done'. Direct calls create standalone runs.
+  let runId = (typeof opts.runId === "string" && opts.runId) ? opts.runId : null;
   try {
+    if (!runId) {
     // Provenance: which process launched this run (pid + code marker).
     // Lets us attribute duplicate runs when two bots share a token.
     const marked = { ...triggerCtx, _launcher: { pid: process.pid, v: "muse-single-ack" } };
-    runId = createRun(cfg.root, { workflowId: workflow.id, kind: triggerCtx.kind || "manual", trigger: marked });
+      runId = createRun(cfg.root, { workflowId: workflow.id, kind: triggerCtx.kind || "manual", trigger: marked });
+    }
   } catch (err) {
     deps.log?.(`[db] createRun failed (continuing without persistence): ${err.message}`);
   }
@@ -162,11 +178,29 @@ function collectTaskItems(step, ctx) {
 
 async function runSteps(cfg, deps, steps, ctx) {
   // Live progress: total up front so the dashboard shows 0/N immediately.
+  // Worker-owned runs already set the full-workflow total; nested
+  // condition/subflow branches must not reset it to the branch length.
   try {
     const { bumpRunProgress } = await import("./db.js");
-    bumpRunProgress(cfg.root, ctx._runId, { total: steps.length, done: 0, title: ctx.trigger?.text || ctx.workflow });
+    if (!ctx._progressTotalSet) {
+      bumpRunProgress(cfg.root, ctx._runId, { total: steps.length, done: 0, title: ctx.trigger?.text || ctx.workflow });
+      ctx._progressTotalSet = true;
+    }
   } catch {}
   for (let i = 0; i < steps.length; i++) {
+    // Cancel checkpoint between steps: stop before starting new work.
+    if (typeof ctx._cancelCheck === "function") {
+      let cancelled = false;
+      try { cancelled = !!ctx._cancelCheck(); } catch {}
+      if (cancelled) {
+        try {
+          const { finishRun, recordActivity } = await import("./db.js");
+          recordActivity(cfg.root, { runId: ctx._runId, kind: "step", actor: ctx.workflow, action: "cancel", detail: `cancelled before step ${i + 1}`, status: "cancelled" });
+          if (ctx._runId) finishRun(cfg.root, ctx._runId, { status: "failed", error: "cancel requested" });
+        } catch {}
+        throw new Error("cancel requested");
+      }
+    }
     ctx._stepIdx = i;
     await runStep(cfg, deps, steps[i], ctx);
     // Live progress: bump done count after each step so the board moves.
@@ -209,9 +243,75 @@ async function runStep(cfg, deps, step, ctx) {
       if (step.output === "json" && step.outputSchema) prompt += jsonPromptSuffix(step.outputSchema);
       const mem = step.memory === false ? "" : formatMemories(searchMemory(cfg.root, prompt, 4));
       const tAgent = Date.now();
+      // Worker path: run through the injected durable executor so agent
+      // steps keep envelopes/claims/reconciler + cancellation context.
+      // No direct model bypass: the executor is the sole spawn path.
+      if (typeof ctx._agentExecutor === "function") {
+        const stepIdx = (Number(ctx._stepBase) || 0) + (Number(ctx._stepIdx) || 0);
+        const { envelope, cancelled, deduped } = await ctx._agentExecutor({
+          agent: step.agent || "assistant", model: step.model || "",
+          prompt, extraContext: mem, runId: ctx._runId, stepIdx,
+          stepId: step.id, cancelCheck: ctx._cancelCheck, jsonContract: step.jsonContract !== false,
+        });
+        const out = envelope.output || "";
+        const patch = { status: envelope.status, summary: envelope.summary, output: envelope.output, tokens: envelope.tokens };
+        try {
+          const { recordAgentSession } = await import("./db.js");
+          recordAgentSession(cfg.root, ctx._runId, {
+            stepNumber: stepIdx, sessionUuid: envelope.sessionId || "",
+            runnerType: "muse-cli", agentRole: step.agent || "assistant",
+            model: envelope.model || step.model || "",
+            workspace: cfg.root, transcriptPath: envelope.resultPath || null,
+          });
+        } catch {}
+        try {
+          recordActivity(cfg.root, { runId: ctx._runId, kind: "tool", actor: step.agent || ctx.workflow, action: `agent:${step.agent || "assistant"}`, detail: String(prompt).slice(0, 300), durationMs: Date.now() - tAgent, status: envelope.status === "done" ? "ok" : "failed" });
+        } catch {}
+        if (cancelled || envelope.status === "cancelled") {
+          persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: patch, agent: step.agent });
+          throw new Error("cancel requested");
+        }
+        if (deduped) {
+          if (step.saveAs) ctx.steps[step.saveAs] = out;
+          ctx.steps[step.id] = out;
+          persistStep(cfg, deps, ctx, step, { rawText: out, outputJson: patch, agent: step.agent });
+          done("ok", String(out).slice(0, 300));
+          return out;
+        }
+        if (envelope.status === "blocked" || envelope.status === "failed") {
+          persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: patch, agent: step.agent });
+          if (step.saveAs) ctx.steps[step.saveAs] = patch;
+          ctx.steps[step.id] = patch;
+          throw new Error(`Step ${step.id}: session reported ${envelope.status} \u2014 ${envelope.summary}`);
+        }
+        let stored = envelope.output ?? out;
+        let outputJson = patch;
+        if (step.output === "json") {
+          const needsCoerce = step.outputSchema && !Object.keys(step.outputSchema).every((k) => patch && patch[k] !== undefined && k !== "output" && k !== "summary");
+          if (!needsCoerce && patch) { stored = patch; outputJson = patch; }
+          else {
+            const parsed = parseJsonOutput(envelope.output ?? out, step.outputSchema);
+            if (parsed.ok) { stored = parsed.value; outputJson = parsed.value; }
+            else {
+              stored = { _raw: out, _parseError: parsed.error };
+              outputJson = stored;
+              persistStep(cfg, deps, ctx, step, { status: "failed", rawText: out, outputJson: stored, agent: step.agent });
+              if (step.saveAs) ctx.steps[step.saveAs] = stored;
+              ctx.steps[step.id] = stored;
+              throw new Error(`Step ${step.id}: agent did not return valid JSON (${parsed.error})`);
+            }
+          }
+        }
+        if (step.saveAs) ctx.steps[step.saveAs] = stored;
+        ctx.steps[step.id] = stored;
+        persistStep(cfg, deps, ctx, step, { rawText: out, outputJson, agent: step.agent });
+        done("ok", String(out).slice(0, 300));
+        return stored;
+      }
       // Loop dispatch: ONE Muse session per step as the agent dispatcher.
       // Session writes JSON (SESSION_JSON_CONTRACT) to step<N>.json; our loop reconciles it into the DB.
       // Model selection lives in configuration (step.model > agent.model > provider.modelDefault).
+      // Cancellation: in-flight CLI work aborts via cancelCheck -> process-tree kill.
       const { dispatchAgent } = await import("./agent.js");
       const session = await dispatchAgent(cfg, {
         agent: step.agent || "assistant", model: step.model || "",
@@ -220,6 +320,7 @@ async function runStep(cfg, deps, step, ctx) {
           runId: ctx._runId, user: ctx.trigger?.user || "", channelId: ctx.trigger?.channelId || "",
           taskTitle: ctx.trigger?.text || ctx.workflow, stepGoal: step.id,
           stepIdx: ctx._stepIdx ?? 0, stepNumber: ctx._stepIdx ?? 0,
+          cancelCheck: typeof ctx._cancelCheck === "function" ? ctx._cancelCheck : undefined,
         },
         useTools: step.tools !== false,
         jsonContract: step.jsonContract !== false,
@@ -227,13 +328,16 @@ async function runStep(cfg, deps, step, ctx) {
       const out = session.raw;
       const patch = session.patch || null;
       // Session record (reference: Sessions tab + agentSessions).
+      // cliSessionId = real Muse CLI --session-id (exportable via `muse export`);
+      // model = resolved model actually sent to the CLI (not the empty step override).
       try {
         const { recordAgentSession } = await import("./db.js");
         recordAgentSession(cfg.root, ctx._runId, {
-          stepNumber: ctx._stepIdx ?? 0, sessionUuid: session.sessionId,
-          runnerType: "tab-automation", agentRole: step.agent || "assistant",
-          model: step.model || cfg.agents?.get?.(step.agent)?.model || cfg.agents?.get?.(step.agent)?.deployment || "",
-          workspace: "tab-automation",
+          stepNumber: ctx._stepIdx ?? 0, sessionUuid: session.cliSessionId || session.sessionId,
+          runnerType: "muse-cli", agentRole: step.agent || "assistant",
+          model: session.model || step.model || "",
+          workspace: cfg.root,
+          transcriptPath: session.stepFile || null,
         });
       } catch {}
       try {
@@ -316,6 +420,10 @@ async function runStep(cfg, deps, step, ctx) {
         workflow: targetId,
         _depth: (ctx._depth ?? 0) + 1,
         _runId: ctx._runId,
+        _cancelCheck: ctx._cancelCheck,
+        _jobId: ctx._jobId,
+        _agentExecutor: ctx._agentExecutor,
+        _stepBase: ctx._stepBase,
       };
       const before = new Set(Object.keys(ctx.steps));
       await runSteps(cfg, deps, target.steps ?? [], subCtx);

@@ -1,9 +1,65 @@
 import { Client, GatewayIntentBits, Events } from "discord.js";
-import { chatWithTools } from "./agent.js";
 import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.js";
 import { handleRickMessage, workflowCatalog } from "./planner.js";
-import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutbox } from "./db.js";
+import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutboxDeduped } from "./db.js";
+
+// Durable Discord enqueue args: preserves configured workflow agents/prompts
+// (automation kind runs the real steps; ephemeral pipelines run as request
+// with their agent chain), persists channel/thread reply context in the
+// payload, and keys idempotency by incoming messageId (never Date.now).
+// Pure + side-effect free: safe to import from tests without booting the bot.
+export function buildDiscordJobArgs(wf, trigger, cfg) {
+  const triggerKind = trigger?.kind || "discord";
+  const msgId = trigger?.messageId || trigger?.msgId || null;
+  const channelId = trigger?.channelId || null;
+  const text = String(trigger?.text || "").slice(0, 4000);
+  const user = trigger?.user || "";
+  const wfAgents = Array.isArray(wf?.steps)
+    ? wf.steps.filter((s) => s?.agent).map((s) => s.agent).slice(0, 6)
+    : [];
+  const triggerAgents = Array.isArray(trigger?.agents) ? trigger.agents.filter(Boolean).slice(0, 6) : [];
+  let kind = "chat";
+  if (triggerKind === "dashboard-requeue") kind = "requeue";
+  else if (triggerKind === "dashboard-flow" || trigger?.automation) kind = "automation";
+  else if (triggerKind === "discord-task" || triggerKind === "request") kind = "request";
+  else if (triggerKind === "discord-pipeline") kind = "request";
+  else if (triggerKind === "discord" || String(triggerKind).startsWith("discord")) {
+    const known = (cfg?.workflows || []).some((w) => w.id === wf?.id);
+    kind = known ? "automation" : "chat";
+  }
+  let payload;
+  if (kind === "request") {
+    const agents = triggerAgents.length ? triggerAgents : wfAgents.length ? wfAgents : ["assistant"];
+    payload = {
+      text, mode: "request", stream: trigger?.stream || "general",
+      agents, taskId: trigger?.taskId || undefined,
+      channelId, messageId: msgId, user,
+    };
+    if (Array.isArray(trigger?.steps) && trigger.steps.length) payload.steps = trigger.steps.slice(0, 6);
+    else if (wfAgents.length && Array.isArray(wf?.steps)) payload.steps = wf.steps.slice(0, 6);
+  } else if (kind === "requeue") {
+    payload = { runId: trigger?.parentRun || "", stepIndex: trigger?.stepIndex || 0, guidance: String(trigger?.guidance || "").slice(0, 2000) };
+  } else if (kind === "automation") {
+    payload = {
+      automationId: trigger?.automation || wf?.id,
+      text, user, channelId, messageId: msgId,
+      source: "discord", command: trigger?.command || null,
+    };
+  } else {
+    payload = { text, workflow: wf?.id, channelId, messageId: msgId, user };
+  }
+  // Durable key: messageId only — never Date.now. Without a messageId use a
+  // deterministic content hash so retries dedupe instead of fanning out.
+  let idempotencyKey = null;
+  if (msgId) idempotencyKey = `discord:${triggerKind}:${wf?.id}:${msgId}`;
+  else if (text) {
+    let h = 0;
+    for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) >>> 0;
+    idempotencyKey = `discord:${triggerKind}:${wf?.id}:hash-${h.toString(36)}`;
+  }
+  return { kind, payload, idempotencyKey };
+}
 
 export function startDiscord(cfg, deps) {
   // Redelivery guard: one Discord message id = one handling. Discord.js can
@@ -106,12 +162,13 @@ export function startDiscord(cfg, deps) {
           return;
         }
         if (cmd === "digest") {
-          // Test the todo-digest pipeline on demand (same steps as the 08:00 cron).
+          // Durable enqueue: the worker runs the digest; reply is the ack.
           const wf = (cfg.workflows || []).find((w) => w.id === "todo-digest");
           if (!wf) { await msg.reply("No todo-digest workflow configured."); return; }
           await msg.channel.sendTyping().catch(() => {});
-          const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
-          await deps.runWorkflow(wf, { kind: "discord", command: "digest", text: "", user: msg.author.tag, channelId: msg.channelId }, msg.channelId, replyTo);
+          const { enqueueJobSync } = await import("./db.js");
+          const { id: jobId } = enqueueJobSync(cfg.root, { kind: "automation", payload: { automationId: "todo-digest", channelId: msg.channelId, messageId: msg.id }, idempotencyKey: `discord:digest:${msg.id}` });
+          await msg.reply(`⏳ Digest queued as job \`${jobId}\` — results post here when done.`);
           return;
         }
         if (cmd === "remind" && rest.length >= 2) {
@@ -142,15 +199,11 @@ export function startDiscord(cfg, deps) {
           (w) => w.trigger?.type === "discord" && w.trigger?.command === cmd
         );
         if (wf) {
+          // Durable enqueue: worker is the sole executor; reply is the ack.
           await msg.channel.sendTyping().catch(() => {});
-          const replyTo = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
-          await deps.runWorkflow(wf, {
-            kind: "discord",
-            command: cmd,
-            text: rest.join(" "),
-            user: msg.author.tag,
-            channelId: msg.channelId,
-          }, msg.channelId, replyTo);
+          const { enqueueJobSync } = await import("./db.js");
+          const { id: jobId } = enqueueJobSync(cfg.root, { kind: "chat", payload: { text: rest.join(" "), workflow: wf.id, channelId: msg.channelId, messageId: msg.id }, idempotencyKey: `discord:cmd:${cmd}:${msg.id}` });
+          await msg.reply(`⏳ **${wf.id}** queued as job \`${jobId}\` — results post here when done.`);
           return;
         }
         // Unknown !command: don't silently ignore — show what's actually available
@@ -183,13 +236,30 @@ export function startDiscord(cfg, deps) {
         });
       } catch {}
       await msg.channel.sendTyping().catch(() => {});
-      // Rick: classify simple-fact vs big-task; pipelines report back in-channel
+      // Rick: classify simple-fact vs big-task; pipelines report back in-channel.
+      // Inbound carries the job link: handleRickMessage returns { jobId } for
+      // queued launches; the worker's deliverDiscordCompletion posts the ACTUAL
+      // result back to this channel/thread on completion (payload channelId +
+      // messageId). The brain row stays "running" until the worker finishes —
+      // awaiting the queue handle does NOT mark fake complete status.
       try {
-        await handleRickMessage(cfg, deps, msg, prompt);
-        try { if (brainId) updateBrainMessage(cfg.root, brainId, { processingStatus: "reply_generated", outboxSummary: "1 sent" }); } catch {}
+        const res = await handleRickMessage(cfg, deps, msg, prompt);
+        const jobId = res?.jobId || res?.runId || null;
+        try {
+          if (brainId) {
+            if (jobId && res?.status === "queued") {
+              updateBrainMessage(cfg.root, brainId, { processingStatus: "running", linkedTaskId: String(jobId), outboxSummary: `queued ${jobId}` });
+            } else if (res && !String(res.kind || "").startsWith("dup") && res.kind !== "clarify" && res.kind !== "list") {
+              updateBrainMessage(cfg.root, brainId, { processingStatus: "reply_generated", outboxSummary: "1 sent" });
+            } else {
+              updateBrainMessage(cfg.root, brainId, { processingStatus: "reply_generated", outboxSummary: "1 sent" });
+            }
+          }
+        } catch {}
       } catch (err) {
-        try { if (brainId) updateBrainMessage(cfg.root, brainId, { processingStatus: "failed", processingError: String(err.message).slice(0, 1000) }); } catch {}
-        try { queueOutbox(cfg.root, { channel: msg.channelId, text: `Brain turn failed for ${msg.author?.tag || "user"}: ${String(err.message).slice(0, 300)}` }); } catch {}
+        try { if (brainId) updateBrainMessage(cfg.root, brainId, { processingStatus: "failed", processingError: String(err.message).slice(0, 1000) }); } catch { /* best effort */ }
+        // Deduped outbox (no fake success): the worker delivers via real sendDiscord.
+        try { queueOutboxDeduped(cfg.root, { channel: msg.channelId, text: `Brain turn failed for ${msg.author?.tag || "user"}: ${String(err.message).slice(0, 300)}` }); } catch { /* best effort */ }
         throw err;
       }
       return;

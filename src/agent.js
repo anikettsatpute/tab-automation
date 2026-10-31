@@ -1,4 +1,4 @@
-import { resolveProvider, buildChatRequest } from "./providers.js";
+import { resolveProvider, buildChatRequest, resolveMuseApiKey } from "./providers.js";
 import { TOOL_DEFS, runTool } from "./webtools.js";
 import { customToolDefs, runCustomTool } from "./custom-tools.js";
 import { TODO_TOOL_DEFS, runTodoTool } from "./todos.js";
@@ -101,12 +101,23 @@ export async function dispatchAgent(cfg, { agent = "assistant", model = "", prom
   if (!base) throw new Error(`Unknown agent '${agent}'`);
   const text = String(prompt ?? "").trim() || String(base.defaultPrompt ?? "").trim();
   if (!text) throw new Error(`Empty prompt and no defaultPrompt for agent '${agent}'`);
+  // Fail closed on non-permitted providers: default MUST be Meta Muse CLI
+  // contributor mode on. No silent Azure fallback.
+  const { gateProvider } = await import("./services/provider-gate.js");
+  let gated;
+  try {
+    gated = gateProvider(cfg, agent);
+  } catch (err) {
+    return { sessionId: `n/a:${Date.now().toString(36)}`, agent, model: model || "", raw: "", ok: false, error: err.message, patch: null };
+  }
   const effective = model?.trim() ? { ...base, model: model.trim() } : base;
   const resolved = resolveProvider({ ...cfg, agents: new Map(cfg.agents).set(agent, effective) }, effective);
   // Muse CLI path (default provider): headless `muse exec` session per step.
   if (resolved.type === "muse") {
-    return dispatchViaMuse(cfg, { agent, base: effective, model: resolved.model, prompt: text, extraContext, toolCtx, jsonContract });
+    return dispatchViaMuse(cfg, { agent, base: effective, model: gated.model && model?.trim() ? model.trim() : gated.model, prompt: text, extraContext, toolCtx, jsonContract });
   }
+  // Non-muse provider configured: fail closed (no silent HTTP fallback).
+  return { sessionId: `n/a:${Date.now().toString(36)}`, agent, model: resolved.model || "", raw: "", ok: false, error: `Provider '${resolved.id}' (type '${resolved.type}') not permitted. Default is Meta Muse CLI contributor mode on.`, patch: null };
   const effCfg = { ...cfg, agents: new Map(cfg.agents).set(agent, effective) };
   // Wrap the prompt so the session returns reconciliable JSON.
   // Force JSON mode on the call so long system prompts can't override the contract.
@@ -148,24 +159,27 @@ export async function dispatchAgent(cfg, { agent = "assistant", model = "", prom
 // Writes the session JSON to data/responses/<runId>/step<N>.json (step1.json
 // style) + reconciles it into a DB patch via reconcileSessionJson.
 // Model: resolved muse model id (default muse-spark-1.3 contributor).
+// Cancellation: toolCtx.cancelCheck (fn) aborts in-flight CLI work via
+// process-tree kill; returns a cancelled envelope instead of hanging.
 async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext = "", toolCtx = {}, jsonContract = true }) {
   // Async spawn (never spawnSync): the HTTP server + Discord must stay
   // responsive while a Muse session thinks (60-120s per step). Blocking the
   // event loop freezes the dashboard + health checks mid-run.
   const { spawn } = await import("node:child_process");
-  const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const { writeFileSync, readFileSync, existsSync } = await import("node:fs");
   const { reconcileSessionJson, sessionPrompt } = await import("./orchestrator.js");
   const { MUSE_DEFAULT_MODEL } = await import("./providers.js");
+  const { resultPathFor, ensureResponsesDir, atomicWriteJson } = await import("./services/paths.js");
+  const { buildEnvelope } = await import("./services/envelope.js");
   const museModel = (model || MUSE_DEFAULT_MODEL).trim() || MUSE_DEFAULT_MODEL;
   const runId = toolCtx.runId || "adhoc";
   const stepIdx = Number(toolCtx.stepIdx ?? toolCtx.stepNumber ?? 0) || 0;
   const sessionId = `${runId}:${agent}:${Date.now().toString(36)}`;
   const t0 = Date.now();
   // Step files: data/responses/<runId>/step<N>.json (+ .prompt.md for audit).
-  const dir = `${cfg.root}/data/responses/${runId}`;
-  try { mkdirSync(dir, { recursive: true }); } catch {}
-  const stepFile = `${dir}/step${stepIdx + 1}.json`;
-  const promptFile = `${dir}/step${stepIdx + 1}.prompt.md`;
+  // Fixed root + atomic rename: file valid before rename, never partial.
+  const { dir, file: stepFile, promptFile } = resultPathFor(cfg.root, runId, stepIdx);
+  try { ensureResponsesDir(cfg.root, runId); } catch {}
   const contractText = sessionPrompt({ agent, taskTitle: toolCtx.taskTitle || "", stepGoal: toolCtx.stepGoal || "", context: extraContext });
   const finalPrompt = jsonContract
     ? `${base.systemPrompt || ""}\n\n---\nTask: ${prompt}\n${extraContext ? `\nContext:\n${String(extraContext).slice(0, 3000)}\n` : ""}\n---\n${contractText}`
@@ -179,29 +193,59 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
   const cliSession = randomUUID();
   const args = [
     "exec", "--provider", "meta", "--model", museModel, "--contributor-mode", "on",
-    "--approval-mode", "never", "--disable-sandbox",
+    "--approval-mode", "never",
+    "--max-model-steps", "25",
+    "--max-tool-output-bytes", "24000",
     "--session-id", cliSession,
     "--prompt-file", promptTmp,
   ];
   const env = { ...process.env };
-  // MUSE_KEY from .env authenticates the CLI (meta provider).
   if (!env.MUSE_KEY && cfg.museKey) env.MUSE_KEY = cfg.museKey;
-  // Async run with timeout: collects stdout/stderr without blocking the loop.
+  const museApiKey = resolveMuseApiKey(cfg, base).key;
+  if (museApiKey) args.push("--api-key-stdin");
+  const museStdin = museApiKey ? "pipe" : "ignore";
+  // Async run with timeout + cancel: collects stdout/stderr without blocking.
+  // Detached process group so cancel kills the whole tree (platform caveat:
+  // Windows lacks process-group kill; falls back to single kill).
+  const cancelCheck = typeof toolCtx.cancelCheck === "function" ? toolCtx.cancelCheck : null;
   const runMuse = () => new Promise((resolve) => {
     let raw = "", stderr = "";
     let child;
     try {
-      child = spawn("muse", args, { env, cwd: cfg.root, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn("muse", args, { env, cwd: cfg.root, stdio: [museStdin, "pipe", "pipe"], detached: process.platform !== "win32" });
+      if (museApiKey && child?.stdin) {
+        try {
+          child.stdin.on("error", () => {});
+          child.stdin.write(museApiKey);
+          child.stdin.end();
+        } catch {}
+      }
     } catch (err) {
       resolve({ raw: "", stderr: String(err.message || err), status: 1, spawnError: err });
       return;
     }
-    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 300000);
+    const timer = setTimeout(() => { killTree(child); }, 300000);
+    let cancelTimer = null;
+    if (cancelCheck) {
+      cancelTimer = setInterval(() => {
+        let want = false;
+        try { want = !!cancelCheck(); } catch {}
+        if (want) { clearTimeout(timer); killTree(child); }
+      }, 500);
+      cancelTimer.unref?.();
+    }
     child.stdout?.on("data", (d) => { raw += String(d); if (raw.length > 8 * 1024 * 1024) raw = raw.slice(-8 * 1024 * 1024); });
     child.stderr?.on("data", (d) => { stderr += String(d); if (stderr.length > 512 * 1024) stderr = stderr.slice(-512 * 1024); });
-    child.on("error", (err) => { clearTimeout(timer); resolve({ raw, stderr, status: 1, spawnError: err }); });
-    child.on("close", (code) => { clearTimeout(timer); resolve({ raw, stderr, status: Number(code ?? 1) }); });
+    child.on("error", (err) => { clearTimeout(timer); if (cancelTimer) clearInterval(cancelTimer); resolve({ raw, stderr, status: 1, spawnError: err }); });
+    child.on("close", (code, signal) => { clearTimeout(timer); if (cancelTimer) clearInterval(cancelTimer); resolve({ raw, stderr, status: Number(code ?? 1), signal }); });
   });
+  function killTree(child) {
+    try {
+      if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+      else child.kill("SIGKILL");
+    } catch { try { child.kill("SIGKILL"); } catch {} }
+  }
+  const cancelledBefore = cancelCheck ? (() => { try { return !!cancelCheck(); } catch { return false; } })() : false;
   let raw = "", stderr = "", status = 0;
   try {
     const r = await runMuse();
@@ -217,6 +261,16 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
     } catch {}
     return { sessionId, agent, model: museModel, raw: "", error: rec0.error, ...rec0, stepFile };
   }
+  const cancelled = cancelledBefore || (cancelCheck ? (() => { try { return !!cancelCheck(); } catch { return false; } })() : false);
+  if (cancelled) {
+    const env1 = buildEnvelope({ runId, stepIdx, attempt: 1, agent, model: museModel, sessionId, cliSessionId: cliSession, resultPath: stepFile, payload: { status: "cancelled", summary: "cancel requested", output: "" }, durationMs: Date.now() - t0 });
+    try { atomicWriteJson(stepFile, env1); } catch {}
+    try {
+      const { recordActivity } = await import("./db.js");
+      recordActivity(cfg.root, { runId: toolCtx.runId || null, kind: "session", actor: agent, action: `session:${sessionId}`, detail: `muse model=${museModel} cancelled`, durationMs: Date.now() - t0, status: "cancelled" });
+    } catch {}
+    return { sessionId, agent, model: museModel, raw: "", ok: true, patch: { status: "cancelled", summary: "cancel requested", output: "", next: "", progress: 0, tokens: 0 }, stepFile, cliSessionId: cliSession, cancelled: true };
+  }
   // Muse prints log lines to stderr; JSON answer is the last {...} block on stdout.
   let jsonText = raw.trim();
   const lastBrace = jsonText.lastIndexOf("{");
@@ -225,7 +279,6 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
     if (m) jsonText = m[0];
     else if (lastBrace !== -1) jsonText = jsonText.slice(lastBrace);
   }
-  try { writeFileSync(stepFile, jsonText.slice(0, 20000)); } catch {}
   if (status !== 0 && !jsonText) {
     const errText = `muse exec exit ${status}: ${stderr.slice(0, 300)}`;
     try {
@@ -238,21 +291,30 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
     ? reconcileSessionJson(jsonText)
     : { ok: true, patch: { status: "done", summary: jsonText.slice(0, 300), output: jsonText.slice(0, 8000), next: "", progress: 0, tokens: 0 } };
   // If the model returned status "complete" (schema-shaped) map to done.
-  if (rec.patch && !["done", "failed", "blocked"].includes(rec.patch.status)) {
+  // Cancellation wins over model output: a late done never masks a cancel.
+  if (cancelled && rec.patch) rec.patch.status = "cancelled";
+  else if (rec.patch && !["done", "failed", "blocked", "cancelled"].includes(rec.patch.status)) {
     if (/complete|success/i.test(rec.patch.status)) rec.patch.status = "done";
+    else rec.patch.status = "failed"; // unknown statuses are failures, never silent done
   }
+  // Trusted immutable envelope: supervisor-owned, atomic rename, hash outside payload.
+  let envelope = null;
+  try {
+    envelope = buildEnvelope({ runId, stepIdx, attempt: 1, agent, model: museModel, sessionId, cliSessionId: cliSession, resultPath: stepFile, payload: rec.ok ? rec.patch : { status: "failed", summary: rec.error, output: "" }, durationMs: Date.now() - t0 });
+    atomicWriteJson(stepFile, envelope);
+  } catch {}
   try {
     const { recordActivity, bumpRunStats } = await import("./db.js");
     if (rec.ok && rec.patch?.tokens) bumpRunStats(cfg.root, runId === "adhoc" ? null : runId, { tokens: rec.patch.tokens });
     recordActivity(cfg.root, {
       runId: toolCtx.runId || null, kind: "session", actor: agent,
-      action: `session:${sessionId}`, detail: `muse model=${museModel} file=${stepFile.split("/").slice(-2).join("/")} ok=${rec.ok} status=${rec.patch?.status || rec.error || "?"}`,
+      action: `session:${sessionId}`, detail: `muse model=${museModel} file=${String(stepFile).split("/").slice(-2).join("/")} ok=${rec.ok} status=${rec.patch?.status || rec.error || "?"}`,
       durationMs: Date.now() - t0, status: rec.ok ? "ok" : "failed",
     });
   } catch {}
   void existsSync;
   void readFileSync;
-  return { sessionId, agent, model: museModel, raw: jsonText, stepFile, ...rec };
+  return { sessionId, agent, model: museModel, raw: jsonText, stepFile, cliSessionId: cliSession, envelope, ...rec };
 }
 export async function chatWithTools(cfg, agentId, userPrompt, { extraContext = "", toolCtx = {} } = {}) {
   const agent = cfg.agents.get(agentId);

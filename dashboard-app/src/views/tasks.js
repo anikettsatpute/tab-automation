@@ -15,30 +15,43 @@ export function taskTypesSection() {
 }
 
 export function tasksView(list, detailPane) {
-  const sel = S.detail;
+  const sel = S.sel;
   const types = S.taskTypes || [];
-  // Attention tab: only blocked / PR-review items. Tasks tab: everything
-  // EXCEPT scheduled automation runs (those live under Automation runs).
+  // Attention tab: blocked + failed<24h. Tasks tab: everything EXCEPT
+  // scheduled automation runs (those live under Automation runs).
   let rows = S.boardTab === "attention" ? list.filter(needsAttention)
+    : S.boardTab === "runs" ? list.filter(isAutomationRun)
     : list.filter((r) => !isAutomationRun(r));
   if (S.kindFilter && S.kindFilter !== "all") rows = rows.filter((r) => kindLabel(r) === S.kindFilter);
-  // Full-width detail: selecting a run swaps the list for the detail pane
-  // (with a back button) instead of squeezing both side-by-side.
-  if (sel) return detailPane(S.detail || { id: sel, status: "running", steps: [], activity: [], sessions: [] });
+  if (sel) {
+    const panel = S.detail ? detailPane(S.detail) : `<div class="detail" aria-busy="${!S.detailError}"><div class="dhead"><button type="button" class="btn ghost sm" id="dback">${icon("arrow-left")} Back</button><span class="spacer"></span><button type="button" class="btn ghost sm" id="dclose" aria-label="Close task detail">${icon("x")} Close</button></div>${S.detailError ? `<div class="status bad" role="alert">${esc(S.detailError)}</div><button type="button" class="btn sm" id="detail-retry">${icon("refresh-cw")} Retry</button>` : `<p class="dim" role="status">Loading task details...</p>`}</div>`;
+    return `<div class="taskwrap"><div class="blist-col">${taskListOnly(rows, list)}</div><div class="tdrawer-backdrop" data-drawer-backdrop aria-hidden="true"></div><aside class="tdrawer" id="task-detail-drawer" role="dialog" aria-modal="true" aria-label="Task detail" tabindex="-1">${panel}</aside></div>`;
+  }
   return `
   ${S.showTypes ? taskTypesSection() : `<button type="button" class="types-toggle" data-types aria-expanded="false"><span>⚙ Task pipelines</span><span class="hint">${types.length} repeatable launches</span><span class="chev" aria-hidden="true">▸</span></button>`}
-  <div class="blist single" role="list" aria-label="Tasks">
+  ${taskListOnly(rows, list)}
+  </div>`;
+}
+
+export function taskListOnly(rows, list) {
+  const loading = !list.length && !S.lastFetchOk;
+  if (loading) return `<div class="blist single" aria-busy="true" aria-label="Loading tasks">${[0, 1, 2].map(() => `<div class="bcard"><div class="skel" style="height:14px;width:40%"></div><div class="skel" style="height:12px;width:90%"></div><div class="skel" style="height:8px;width:70%"></div></div>`).join("")}<p class="hint">Loading runs…</p></div>`;
+  // No aria-label on the card buttons: the visible card text (title,
+  // status pill, origin, id, time, progress) already IS the accessible name.
+  // A shortened aria-label rephrasing it trips axe
+  // label-content-name-mismatch (serious). Screen readers get the full card.
+  return `<div class="blist single" role="group" aria-label="Tasks">
       ${rows.map((r) => {
         const pg = r.progress || { completed: 0, total: 0 };
         const pct = pg.total ? Math.round(pg.completed / pg.total * 100) : 0;
         return `
-      <button type="button" role="listitem" class="bcard ${S.sel === r.id ? "sel" : ""}" data-sel="${esc(r.id)}" aria-current="${S.sel === r.id}" aria-label="${esc(displayTitle(r).slice(0, 80))} — ${esc(r.status)}">
+      <button type="button" class="bcard ${S.sel === r.id ? "sel" : ""}" data-sel="${esc(r.id)}" aria-current="${S.sel === r.id}">
         <span class="btop">${pill(r.status)} ${originChip(kindLabel(r))}<span class="hint">#${esc(String(r.id).slice(0, 6))}</span><span class="spacer"></span><span class="hint">${icon("clock")} ${ago(r.startedAt)}</span></span>
         <span class="btitle">${esc(displayTitle(r).slice(0, 100))}</span>
-        <span class="bmeta"><span class="dim">${esc(r.taskType || r.kind || r.workflow || "")}</span>${r.prUrl ? `<span class="hint">· ${icon("git-pull-request")} PR linked</span>` : ""}${r.commentsCount ? `<span class="hint">· ${icon("message-square")} ${r.commentsCount}</span>` : ""}</span>
+        <span class="bmeta"><span class="dim">${esc(r.taskType || r.kind || r.workflow || "")}</span>${r.stream || r.repository ? `<span class="hint">· ${esc(r.stream || r.repository)}</span>` : ""}${r.commentsCount ? `<span class="hint">· ${icon("message-square")} ${r.commentsCount}</span>` : ""}</span>
         ${progress(pg.completed, pg.total)}
         ${r.tokens ? `<span class="bmeta"><span class="hint">${icon("coins")} ${Number(r.tokens).toLocaleString()} tokens</span>${r.toolCalls ? `<span class="hint">· ${icon("wrench")} ${r.toolCalls} tools</span>` : ""}</span>` : ""}
-      </button>`; }).join("") || emptyState("inbox", S.boardTab === "attention" ? "All clear" : "No tasks", S.boardTab === "attention" ? "Blocked runs and PR reviews will land here." : "No tasks match the current filter.", `<button type="button" class="btn sm ghost" data-clearf>Clear filter</button>`)}
+      </button>`; }).join("") || emptyState("inbox", S.boardTab === "attention" ? "All clear" : "No tasks", S.boardTab === "attention" ? "Blocked runs and failures from the last 24h will land here." : "No tasks match the current filter.", `<button type="button" class="btn sm ghost" data-clearf>Clear filter</button>`)}
   </div>`;
 }
 

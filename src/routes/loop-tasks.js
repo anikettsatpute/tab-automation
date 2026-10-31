@@ -16,20 +16,19 @@ export function registerLoopTaskRoutes(app, ctx) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  // Launch a task from a type + goal: creates the task row with per-goal steps,
-  // then runs the agent chain (each step spawns a Muse session, JSON reconciled).
-  // Tasks ≠ automations: same pipeline shape (agent chain), but repeatable per
-  // goal — one task row + one run per launch. After the run we sync run_steps
-  // back into task_steps so the Loop-tasks pane shows real outputs, not pending.
+  // Launch a task from a type + goal: creates the task row with per-goal
+  // steps, then enqueues a request job (fast 202). The worker runs the agent
+  // chain and reconciles envelopes; task_steps sync happens in the worker.
   app.post("/api/control/task-types/:id/launch", async (c) => {
+    const g = (await import("../services/access.js")).mutationGuard(c);
+    if (!g.ok) return c.json({ error: g.error }, g.status);
     try {
-      const { goal, title } = await c.req.json().catch(() => ({}));
+      const { goal, title, idempotencyKey } = await c.req.json().catch(() => ({}));
       if (!goal || !String(goal).trim()) return c.json({ error: "goal required" }, 400);
       const doc = loadJson("config/streams.json", { taskTypes: [] });
       const type = (doc.taskTypes || []).find((t) => t.id === c.req.param("id"));
       if (!type) return c.json({ error: "unknown task type" }, 404);
-      const { runWorkflow } = await import("../workflow.js");
-      const { getRun, listRuns } = await import("../db.js");
+      const { enqueueJobSync, audit } = await import("../db.js");
       const taskId = createTask(root, {
         title: title || `${type.name}: ${String(goal).slice(0, 80)}`,
         repo: type.stream || "general", task_type: type.id, status: "open",
@@ -40,58 +39,14 @@ export function registerLoopTaskRoutes(app, ctx) {
         prompt: `Task ${taskId} (${type.id}) step ${i + 1}/${type.agents.length} as '${agent}'.\nGoal: ${String(goal).slice(0, 1500)}\nDo the ${agent} work now, concretely.`,
       }));
       saveTaskSteps(root, taskId, steps.map((s, i) => ({ step_id: s.id, type: s.type, agent: s.agent, model: "", status: "pending", prompt: s.prompt, output: "", position: i })));
-      const wf = { id: `task-${taskId}`, name: `${type.name} ${taskId}`, trigger: { type: "manual" }, steps };
-      const trigger = { kind: "dashboard-task", text: String(goal).slice(0, 1000), user: "dashboard", taskId, taskType: type.id };
-      let runCtx = null, runError = null;
-      try {
-        runCtx = await runWorkflow(cfg, { log, sendDiscord: async () => {} }, wf, trigger);
-      } catch (e) {
-        runError = e;
-      }
-      // Sync run_steps -> task_steps so Loop tasks pane shows real per-step outputs.
-      let runId = runCtx?._runId || null;
-      if (!runId) {
-        try {
-          const cand = listRuns(root, { workflowId: `task-${taskId}`, limit: 1 })[0];
-          if (cand) runId = cand.id;
-        } catch {}
-      }
-      let runStatus = runCtx ? "done" : "failed";
-      let runErrText = runError ? String(runError.message || runError).slice(0, 500) : "";
-      try {
-        if (runId) {
-          const full = getRun(root, runId);
-          if (full) {
-            runStatus = full.status || runStatus;
-            runErrText = full.error || runErrText;
-            const rsteps = full.steps || [];
-            const synced = steps.map((s, i) => {
-              const rs = rsteps.find((x) => x.step_id === s.id) || rsteps[i];
-              const st = !rs ? "pending" : rs.status === "ok" ? "done" : rs.status === "failed" ? "failed" : "pending";
-              let out = "";
-              if (rs) {
-                try {
-                  const oj = rs.output_json ? JSON.parse(rs.output_json) : null;
-                  out = String(oj?.output || oj?.summary || rs.raw_text || "").slice(0, 8000);
-                } catch { out = String(rs.raw_text || "").slice(0, 8000); }
-              }
-              return { step_id: s.id, type: s.type, agent: s.agent, model: "", status: st, prompt: s.prompt, output: out, position: i };
-            });
-            saveTaskSteps(root, taskId, synced);
-            const doneCount = synced.filter((s) => s.status === "done").length;
-            updateTask(root, taskId, {
-              status: runStatus === "done" ? "done" : "failed",
-              progress: Math.round((doneCount / Math.max(1, synced.length)) * 100),
-              tokens: full.tokens || 0,
-              blocked_reason: runStatus === "done" ? "" : (runErrText || "step failed").slice(0, 500),
-            });
-          }
-        } else {
-          updateTask(root, taskId, { status: "failed", progress: 0, blocked_reason: runErrText.slice(0, 500) || "no run" });
-        }
-      } catch {}
-      writeLog(root, { level: "info", source: "dashboard-task", message: `task ${taskId} [${type.id}] launched -> run ${runId || "?"} (${runStatus})`, runId: runId || null });
-      return c.json({ ok: true, taskId, runId, agents: type.agents, status: runStatus, error: runStatus === "done" ? undefined : runErrText });
+      const { id: jobId, deduped, job } = enqueueJobSync(root, {
+        kind: "request",
+        payload: { text: String(goal).slice(0, 4000), mode: "request", stream: type.stream || "general", agents: type.agents || [], taskId },
+        idempotencyKey: idempotencyKey || null,
+      });
+      audit(root, { actor: (await import("../services/access.js")).auditActor(c), action: "task-type.launch.enqueue", target: taskId, detail: `job ${jobId} type=${type.id}` });
+      writeLog(root, { level: "info", source: "dashboard-task", message: `task ${taskId} [${type.id}] enqueued as ${jobId}`, runId: null });
+      return c.json({ ok: true, taskId, jobId, deduped: !!deduped, status: job.status, agents: type.agents, hint: "202 accepted — poll /api/control/jobs/:id for runId" }, deduped ? 200 : 202);
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
@@ -130,21 +85,24 @@ export function registerLoopTaskRoutes(app, ctx) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  // Dispatch an agent for a loop task step (reference: dispatchAgent + model selection).
+  // Dispatch an agent for a loop task step: fast 202 enqueue (never await
+  // long work in the request). Worker runs the Muse session + reconciles.
   app.post("/api/control/loop-tasks/:id/dispatch", async (c) => {
+    const g = (await import("../services/access.js")).mutationGuard(c);
+    if (!g.ok) return c.json({ error: g.error }, g.status);
     try {
-      const { agent, model, prompt, stepId } = await c.req.json().catch(() => ({}));
+      const { agent, model, prompt, stepId, idempotencyKey } = await c.req.json().catch(() => ({}));
       if (!agent) return c.json({ error: "agent required" }, 400);
-      const { dispatchAgent } = await import("../agent.js");
-      const out = await dispatchAgent(cfg, { agent, model: model || "", prompt: prompt || "" });
-      const d = getTaskWithSteps(root, c.req.param("id"));
-      if (d) {
-        const steps = (d.steps || []).map((s) =>
-          s.step_id === stepId ? { ...s, output: String(out).slice(0, 8000), status: "done" } : s);
-        saveTaskSteps(root, c.req.param("id"), steps);
-      }
-      writeLog(root, { level: "info", source: "loop-dispatch", message: `task ${c.req.param("id")} step ${stepId || "?"} <- ${agent}/${model || "default"}`, runId: null });
-      return c.json({ ok: true, output: String(out).slice(0, 4000) });
+      if (!(cfg.agents?.has?.(agent))) return c.json({ error: `unknown agent '${agent}'` }, 400);
+      const { enqueueJobSync, audit } = await import("../db.js");
+      const { id: jobId, deduped, job } = enqueueJobSync(root, {
+        kind: "loop-task",
+        payload: { taskId: c.req.param("id"), agent, model: model || "", prompt: prompt || "", stepId: stepId || "step-1" },
+        idempotencyKey: idempotencyKey || null,
+      });
+      audit(root, { actor: (await import("../services/access.js")).auditActor(c), action: "loop-task.dispatch.enqueue", target: c.req.param("id"), detail: `job ${jobId} agent=${agent}` });
+      writeLog(root, { level: "info", source: "loop-dispatch", message: `task ${c.req.param("id")} step ${stepId || "?"} <- ${agent}/${model || "default"} enqueued as ${jobId}`, runId: null });
+      return c.json({ ok: true, jobId, deduped: !!deduped, status: job.status, hint: "202 accepted — poll /api/control/jobs/:id" }, deduped ? 200 : 202);
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 }

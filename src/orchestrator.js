@@ -85,9 +85,10 @@ export function reconcileSessionJson(raw) {
   } catch (err) {
     return { ok: false, error: "session JSON parse failed: " + err.message, patch: null };
   }
-  let status = String(parsed.status || "done").toLowerCase();
+  let status = String(parsed.status || "").toLowerCase().trim();
   if (/complete|success/.test(status)) status = "done";
-  if (!["done", "failed", "blocked"].includes(status)) status = "done";
+  // Unknown statuses are failures, never silent done (fail closed).
+  if (!["done", "failed", "blocked"].includes(status)) status = "failed";
   const patch = {
     status,
     summary: String(parsed.summary || "").slice(0, 1000),
