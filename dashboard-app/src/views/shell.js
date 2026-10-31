@@ -12,7 +12,7 @@ export const NAV_ITEMS = [
 
 const NAV_COUNT = () => ({
   board: S.loopTasks.length, brain: (S.brain?.messages?.length ?? S.brain?.metrics?.incoming ?? 0),
-  todos: S.todos.filter((t) => t.status === "open").length, automations: S.flows.length, requests: S.loopRequests.length,
+  todos: (S.todos || []).filter((t) => t.status === "open").length, automations: S.flows.length, requests: S.loopRequests.length,
 });
 
 const STATUS_ROWS = [["running", "Running", "run", "loader"], ["queued", "Queued", "", "clock"], ["blocked", "Blocked", "orange", "octagon-alert"], ["failed", "Failed", "bad", "x-circle"], ["done", "Done", "ok", "check-circle-2"], ["cancelled", "Cancelled", "", "circle-dashed"]];

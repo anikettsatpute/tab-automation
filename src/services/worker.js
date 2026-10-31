@@ -426,7 +426,11 @@ async function runAutomationJob(cfg, deps, dbx, db, jobs, job, payload, cancelCh
       jobId: job.id, runId, cancelCheck, executeAgentStep,
     });
     try { dbx.bumpRunProgress(cfg.root, runId, { done: (wf.steps || []).length }); } catch {}
-    const lastKey = (wf.steps || [])[(wf.steps || []).length - 1]?.id;
+    // Result = last executed content step; condition/log steps only hold "true"/"false" or noise.
+    const skip = new Set();
+    const walk = (list) => { for (const s of list || []) { if (["condition", "log", "discord_send"].includes(s.type)) skip.add(s.id); walk(s.then); walk(s.else); } };
+    walk(wf.steps);
+    const lastKey = Object.keys(wctx.steps || {}).filter((k) => !skip.has(k) && wctx.steps[k] != null && wctx.steps[k] !== "").pop();
     const lastVal = lastKey != null ? wctx.steps[lastKey] : "";
     const prevOutput = typeof lastVal === "string" ? lastVal : (lastVal != null ? JSON.stringify(lastVal) : "");
     dbx.finishRun(cfg.root, runId, { status: "done" });
