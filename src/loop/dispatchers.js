@@ -2,7 +2,9 @@
 // Contract: dispatch(opts) -> Promise<{ exitCode, signal, stdout, stderr, durationMs, sessionId, error? }>.
 // The agent is told to write its result JSON to opts.resultPath; stdout is kept as a fallback + transcript.
 import { spawn, spawnSync } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildChildEnv } from "../services/runner.js";
 import { resolveMuseApiKey } from "../providers.js";
@@ -65,6 +67,8 @@ export const muse = {
       "--session-id", sessionId, "--prompt-file", promptFile,
     ];
     if (outputSchema) args.push("--output-schema", outputSchema);
+    // Opt-in: bwrap cannot create namespaces in some hosts (e.g. flatpak), which blocks every shell call.
+    if (process.env.LOOP_MUSE_SANDBOX === "off") args.push("--disable-sandbox");
     const apiKey = resolveMuseApiKey(cfg, role).key;
     if (apiKey) args.push("--api-key-stdin");
     const r = await run(museBin(), args, { key, cwd, env: buildChildEnv(cfg), stdin: apiKey || null, timeoutMs, transcriptPath });
@@ -73,7 +77,9 @@ export const muse = {
 };
 
 // ---------- GitHub Copilot CLI ----------
-const copilotBin = () => process.env.COPILOT_BIN || "copilot";
+// Prefer the npm-installed CLI: VS Code puts an install-prompt shim named `copilot` earlier on PATH.
+const LOCAL_COPILOT = path.join(os.homedir(), ".local/bin/copilot");
+const copilotBin = () => process.env.COPILOT_BIN || (existsSync(LOCAL_COPILOT) ? LOCAL_COPILOT : "copilot");
 
 export const copilot = {
   id: "copilot",
