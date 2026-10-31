@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import Ajv from "ajv";
 import * as store from "./store.js";
 import { appendHandoff, taskDir, isInside, writeTaskSnapshot } from "./workspace.js";
+import { finalAssistantText } from "./transcript.js";
 
 const require = createRequire(import.meta.url);
 const ajv = new Ajv({ allErrors: true, strict: false });
@@ -36,6 +37,9 @@ export function extractJson(text) {
 
 /** Pull the agent's final text out of `muse exec --json`/plain stdout, then extract JSON. */
 export function jsonFromStdout(stdout) {
+  // Structured event streams: the final assistant message carries the result (deltas may split it).
+  const fin = finalAssistantText(stdout);
+  if (fin) { const o = extractJson(fin); if (o) return o; }
   const direct = extractJson(stdout);
   if (direct) return direct;
   // JSONL event streams: look for string fields that themselves contain the JSON.

@@ -7,6 +7,7 @@ import {
   fileRequest,
 } from "../db.js";
 import { loadJson } from "../setup-api.js";
+import { parseMuseExport } from "../loop/transcript.js";
 
 export function registerTaskRoutes(app, ctx) {
   const { root, cfg, log } = ctx;
@@ -344,6 +345,7 @@ export function registerTaskRoutes(app, ctx) {
         sessionId: cliId, agent: s.agent_role, model: s.model,
         turnCount: meta.turn_count ?? turns.length, stepCount: meta.step_count ?? null,
         exitReason: meta.session_end?.exit_reason || null, turns: turns.slice(0, 100),
+        chat: parseMuseExport(doc),
         legacy: legacyResolved, syntheticId: legacyResolved ? s.session_uuid : undefined,
       };
       _exportCache.set(cliId, { at: Date.now(), data });

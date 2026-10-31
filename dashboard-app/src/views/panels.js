@@ -79,7 +79,7 @@ export function brainView() {
   const ts = (x) => x.receivedAt || x.ts || "";
   const st = (x) => x.processingStatus || x.status || "queued";
   return `
-  ${pageHead("Brain messages", `${msgs.length} shown`, `<span class="hint">${icon("rss")} poller ${b.poller?.enabled ? "on" : "off"} · ${b.poller?.intervalMin || 2} min · #${esc(b.poller?.channel || "discord")}</span>`)}
+  ${pageHead("Messages", `${msgs.length} shown`, `<span class="hint">${icon("rss")} poller ${b.poller?.enabled ? "on" : "off"} · ${b.poller?.intervalMin || 2} min · #${esc(b.poller?.channel || "discord")}</span>`)}
   ${statRow([
     { icon: "inbox", label: "Incoming", value: m.incoming ?? msgs.length },
     { icon: "clock", label: "Queued", value: m.queued ?? 0 },
@@ -97,7 +97,7 @@ export function brainView() {
   <td>${pill(st(x) === "failed" ? "failed" : st(x) === "reply_generated" || st(x) === "replied" ? "done" : "running")}<br><span class="hint">${esc(st(x))}</span></td>
   <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5">${emptyState("brain", "No messages", "Discord mentions will land here.")}</td></tr>`}
   </tbody></table></div>
-  ${sel ? `<div class="appr" role="dialog" aria-modal="false" aria-label="Brain message details" id="brain-drawer"><div class="row"><b>Brain message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx" aria-label="Close message details">${icon("x")}</button></div>
+  ${sel ? `<div class="appr" role="dialog" aria-modal="false" aria-label="Message details" id="brain-drawer"><div class="row"><b>Message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx" aria-label="Close message details">${icon("x")}</button></div>
   <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">${icon("terminal")} Session</button></div>
   ${S.brainTab === "details" ? `<div class="grid2"><span>Job ID</span><span class="kbd">${esc(sel.jobId || sel.id || "")}</span><span>Actor ID</span><span class="kbd">${esc(sel.actorId || "—")}</span><span>Conversation</span><span class="kbd">${esc(sel.conversationId || sel.channelId || "—")}</span><span>Updated</span><span>${esc(String(ts(sel)).slice(0, 19).replace("T", " "))}</span></div>
   ${sel.linkedTaskId ? `<p class="dim">Linked work: <span class="kbd">${esc(sel.linkedTaskId)}</span></p>` : ""}
@@ -117,13 +117,6 @@ export function requestsView() {
   ${(r.tasks || []).length ? `<div class="row">${r.tasks.map((t) => `<button type="button" class="btn sm ghost" data-gotask="${esc(t.id)}">#${t.seq} ${esc(String(t.title).slice(0, 40))} · ${esc(t.status)}</button>`).join("")}</div>` : ""}</div>`).join("") || emptyState("inbox", "No requests yet", "Hit + New task to file your first goal.")}</div>`;
 }
 
-export function outboxView() {
-  return `
-  ${pageHead("Outbox", `${S.outbox.length} queued/sent`)}
-  <div class="chatbox"><input id="ob-in" placeholder="Queue a notification…"><button class="btn sm primary" id="ob-add">${icon("send")} Queue</button></div>
-  ${S.outbox.map((o) => `<div class="appr"><div class="row">${pill(o.status)}<b>${esc(String(o.text || "").slice(0, 120))}</b><span class="spacer"></span>${o.status !== "sent" ? `<button class="btn sm ghost" data-obsent="${esc(o.id)}">Mark sent</button>` : `<span class="hint">${esc(String(o.sent_at || "").slice(0, 16).replace("T", " "))}</span>`}</div>
-  <p class="hint">${esc(o.channel || "default")} · ${esc(String(o.created_at || "").slice(0, 16).replace("T", " "))}${o.run_id ? ` · run ${esc(o.run_id)}` : ""}</p></div>`).join("") || emptyState("send", "Outbox empty", "Queued notifications will appear here.")}</div>`;
-}
 
 export function retroView() {
   const r = S.retro;
@@ -289,10 +282,10 @@ export function reqModal() {
 export function cmdPalette() {
   if (!S.cmdOpen) return "";
   const cmds = [
-    ["board", "Go to Board"], ["brain", "Go to Brain messages"],
+    ["board", "Go to Board"], ["brain", "Go to Messages"],
     ["todos", "Go to TODOs"], ["automations", "Go to Automations"], ["config", "Go to Configuration"],
     ["requests", "Go to Requests"],
-    ["outbox", "Go to Outbox"], ["activity", "Go to Activity"], ["retro", "Go to Retro"],
+    ["activity", "Go to Activity"], ["retro", "Go to Retro"],
     ["new", "+ New task"], ["pause", "Pause / Resume loop"], ["refresh", "Refresh now"],
   ].filter(([v, l]) => !S.q || l.toLowerCase().includes(S.q.toLowerCase()));
   return `<div class="modal"><div class="mbox"><div class="dhead"><b>Commands</b><span class="spacer"></span><button type="button" class="btn ghost sm" id="cmdx" aria-label="Close">${icon("x")}</button></div>

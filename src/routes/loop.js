@@ -7,6 +7,7 @@ import { ownerForRequest, getAttachmentOwned, deleteAttachmentOwned } from "../s
 import * as store from "../loop/store.js";
 import { readHandoff, readWorkspaceFile, taskDir, isInside, atomicWrite } from "../loop/workspace.js";
 import { dispatcherStatus } from "../loop/dispatchers.js";
+import { parseTranscript } from "../loop/transcript.js";
 import { loadTaskTypes, upsertTaskType, deleteTaskType } from "../loop/task-types.js";
 import { requeue, taskAction, engineStatus, onLoopEvent } from "../loop/engine.js";
 
@@ -97,6 +98,15 @@ export function registerLoopRoutes(app, { root, cfg, log }) {
   app.get(`${P}/tasks/:id/sessions`, (c) => {
     const t = loadTask(c); if (!t) return bad(c, "not found", 404);
     return c.json({ sessions: store.listAttempts(root, t.id) });
+  });
+  // Parsed session transcript (chat view): user prompt, assistant replies, tool calls + outputs.
+  app.get(`${P}/tasks/:id/attempts/:attemptId/chat`, (c) => {
+    const t = loadTask(c); if (!t) return bad(c, "not found", 404);
+    const a = store.getAttempt(root, c.req.param("attemptId"));
+    if (!a || a.task_id !== t.id) return bad(c, "attempt not found", 404);
+    const text = a.transcript_path ? readWorkspaceFile(root, t.id, a.transcript_path, 4000000) : null;
+    if (text == null) return c.json({ chat: { format: "none", items: [], meta: {} } });
+    return c.json({ chat: parseTranscript(text) });
   });
   // Raw attempt files: prompt | context | result | transcript (confined to the task workspace).
   app.get(`${P}/tasks/:id/attempts/:attemptId/:kind`, (c) => {

@@ -8,6 +8,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildChildEnv } from "../services/runner.js";
 import { resolveMuseApiKey } from "../providers.js";
+import { parseTranscript } from "./transcript.js";
 
 const active = new Map(); // key -> ChildProcess
 const MAX_STDOUT = 2 * 1024 * 1024;
@@ -64,7 +65,7 @@ export const muse = {
       "exec", "--provider", "meta", "--model", model || "muse-spark-1.3", "--contributor-mode", "on",
       "--approval-mode", "never", "--no-foreign-personal-context", "--disable-reminders", "--disable-request-user-input",
       "--max-model-steps", String(maxModelSteps), "--max-tool-output-bytes", "24000",
-      "--session-id", sessionId, "--prompt-file", promptFile,
+      "--session-id", sessionId, "--prompt-file", promptFile, "--json",
     ];
     if (outputSchema) args.push("--output-schema", outputSchema);
     // Opt-in: bwrap cannot create namespaces in some hosts (e.g. flatpak), which blocks every shell call.
@@ -92,12 +93,13 @@ export const copilot = {
   },
   async dispatch(cfg, { key, model, cwd, promptText, taskDir, transcriptPath, timeoutMs = 900000 }) {
     // Headless: prompt via -p; tools auto-approved because nobody can answer prompts in Auto mode.
-    const args = ["-p", promptText, "--allow-all-tools", "--add-dir", taskDir];
+    // JSONL events: the dashboard renders them as a chat transcript (tools, outputs, replies).
+    const args = ["-p", promptText, "--allow-all-tools", "--add-dir", taskDir, "--output-format", "json"];
     if (model) args.push("--model", model);
     const extra = String(process.env.COPILOT_EXTRA_ARGS || "").trim();
     if (extra) args.push(...extra.split(/\s+/));
     const r = await run(copilotBin(), args, { key, cwd, env: buildChildEnv(cfg), timeoutMs, transcriptPath });
-    return { ...r, sessionId: "" };
+    return { ...r, sessionId: parseTranscript(r.stdout).meta?.sessionId || "" };
   },
 };
 

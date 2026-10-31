@@ -1,9 +1,10 @@
 // Automation runs tab: each executed flow run as a pipeline (same look as loop tasks).
 // Data comes from /api/control/tasks (S.tasks) — run + its steps; read-only.
 import { S, esc, ago, kindLabel } from "./state.js";
-import { icon, emptyState } from "./ui.js";
+import { icon, emptyState, pageHead, toolbar, searchBox } from "./ui.js";
 import { md } from "./md.js";
 import { ring, lpill } from "./loop.js";
+import { chatView } from "./chat.js";
 
 const STEP_ST = { ok: "done", done: "done", error: "failed", failed: "failed", running: "running", skipped: "skipped", pending: "pending", blocked: "blocked" };
 const STEP_IC = { done: "check-circle-2", running: "loader", failed: "x-circle", blocked: "octagon-alert", pending: "circle", skipped: "circle-dashed" };
@@ -30,14 +31,42 @@ function row(r) {
   </button>`;
 }
 
+export function runsHead() {
+  const q = (S.q || "").toLowerCase().trim();
+  const all = automationRuns();
+  const shown = all.filter((r) => matches(r, q)).length;
+  return `${pageHead("Board", `${shown} of ${all.length} automation runs`, "")}
+  ${toolbar(searchBox("fq2", S.q, "Filter by flow, title or #id"))}`;
+}
+
 export function automationRunsView() {
   const q = (S.q || "").toLowerCase().trim();
   const list = automationRuns().filter((r) => matches(r, q) && (!S.statusFilter || runStatus(r) === S.statusFilter));
   const body = list.length
-    ? `<div class="lboard" role="group" aria-label="Automation runs">${list.map(row).join("")}</div>`
+    ? `<div class="lboard runs" role="group" aria-label="Automation runs">${list.map(row).join("")}</div>`
     : emptyState("workflow", "No automation runs", "Runs appear here when a flow fires — from a schedule, Discord, or Run in Automations.");
   return `${body}${S.runSel ? runDrawer() : ""}`;
 }
+
+// Agent sessions recorded for the run (Muse CLI). Hide legacy synthetic ids when the real UUID row exists.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function runSessions() {
+  const list = (S.runDetail?.id === S.runSel ? S.runDetail.sessions : null) || [];
+  const withIdx = list.map((s, idx) => ({ ...s, idx })).filter((s) => s.sessionUuid);
+  return withIdx.filter((s) => UUID.test(s.sessionUuid) || !withIdx.some((o) => o !== s && UUID.test(o.sessionUuid) && o.stepNumber === s.stepNumber && o.agent === s.agent));
+}
+
+function sessionsPane(r) {
+  if (S.runDetail?.id !== r.id) return `<p class="hint" role="status">Loading sessions…</p>`;
+  const list = runSessions();
+  if (!list.length) return `<p class="hint">No agent sessions recorded for this run (only agent steps open a CLI session).</p>`;
+  const cur = list.find((s) => s.idx === S.runSessIdx) || list[0];
+  const key = `run:${r.id}:${cur.idx}`;
+  return `<label class="fld"><span>Session</span><select id="rsess">${list.map((s) => `<option value="${s.idx}" ${s.idx === cur.idx ? "selected" : ""}>Step ${Number(s.stepNumber) + 1} · ${esc(s.agent || "agent")} · ${esc(s.model || "")}</option>`).join("")}</select></label>
+  <div class="sessgrid"><span>Runner</span><span>${esc(s0(cur.runner))}</span><span>Session</span><span>${esc(cur.sessionUuid)}</span><span>Agent</span><span>${esc(cur.agent || "—")} · step ${Number(cur.stepNumber) + 1}</span><span>Model</span><span>${esc(cur.model || "default")}</span>${cur.workspace ? `<span>Workspace</span><span>${esc(cur.workspace)}</span>` : ""}</div>
+  <div data-chatload="${esc(key)}">${chatView(S.chats?.[key] || { loading: true }, key)}</div>`;
+}
+const s0 = (runner) => (runner === "muse-cli" ? "Muse CLI" : runner || "Muse CLI");
 
 function pipeline(steps) {
   if (!steps.length) return `<p class="hint">No steps recorded.</p>`;
@@ -76,11 +105,13 @@ export function runDrawer() {
     <div class="lprog" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Run progress"><span style="width:${pct}%"></span></div>
     <div class="lprog-l">${done}/${steps.length} steps</div>
     ${r.error ? `<div class="status bad" role="alert"><b>Error:</b> ${esc(r.error)}</div>` : ""}
+    <nav class="tabs" role="tablist" aria-label="Run detail tabs">${[["overview", "Overview", "file-text"], ["sessions", `Sessions${S.runDetail?.id === r.id ? ` (${runSessions().length})` : ""}`, "terminal"]].map(([v, l, ic]) => `<button type="button" role="tab" aria-selected="${S.runTab === v}" class="tab ${S.runTab === v ? "on" : ""}" data-rtab="${v}">${icon(ic)} ${esc(l)}</button>`).join("")}</nav>
+    <div class="dbody" role="tabpanel">${S.runTab === "sessions" ? sessionsPane(r) : `
     <div class="lsec-h">${icon("workflow")} Pipeline</div>${pipeline(steps)}
     <div class="lsec-h">Steps</div>${stepsList(steps)}
     ${r.trigger?.text ? `<div class="lsec-h">Trigger</div><div class="mdbox">${md(r.trigger.text)}</div>` : ""}
     <div class="lsec-h">Details</div>
-    <div class="sessgrid"><span>Flow</span><span>${esc(r.workflow || "—")}</span><span>Origin</span><span>${esc(kindLabel(r))}</span><span>Started</span><span>${esc(String(r.startedAt || "").slice(0, 19).replace("T", " "))}</span><span>Duration</span><span>${dur}</span><span>Tokens</span><span>${r.tokens ? Number(r.tokens).toLocaleString() : "—"}</span></div>
+    <div class="sessgrid"><span>Flow</span><span>${esc(r.workflow || "—")}</span><span>Origin</span><span>${esc(kindLabel(r))}</span><span>Started</span><span>${esc(String(r.startedAt || "").slice(0, 19).replace("T", " "))}</span><span>Duration</span><span>${dur}</span><span>Tokens</span><span>${r.tokens ? Number(r.tokens).toLocaleString() : "—"}</span></div>`}</div>
     </div>`;
   }
   return `<div class="tdrawer-backdrop" data-drawer-backdrop aria-hidden="true"></div><aside class="tdrawer" id="task-detail-drawer" role="dialog" aria-modal="true" aria-label="Run detail" tabindex="-1">${panel}</aside>`;

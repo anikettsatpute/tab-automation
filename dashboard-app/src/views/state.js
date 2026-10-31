@@ -24,6 +24,7 @@ export const S = {
   loopTasks: [], loopCounts: {}, loopEngine: null, loopRequests: [], loopActivity: [],
   dispatchers: [], loopTypes: [], loopAgents: [], todoForm: false,
   openSteps: new Set(), files: {}, handoff: null, appendForm: false, boardTab: "tasks", runSel: null,
+  runTab: "overview", runDetail: null, runSessIdx: -1, chats: {}, chatOpen: new Set(),
   cmdOpen: false, cmdIdx: 0, theme: "dark",
   groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all", showTypes: false,
   showCtx: false, sessIdx: 0, sessExport: null, sessToolFilter: "all", diagFull: false, reqChanges: "", appendTitle: "",

@@ -3,6 +3,7 @@
 import { S, esc, ago } from "./state.js";
 import { icon, pageHead, emptyState, toolbar, searchBox, selectBox } from "./ui.js";
 import { md } from "./md.js";
+import { chatView } from "./chat.js";
 
 export const LOOP_STATUSES = ["queued", "running", "blocked", "failed", "done", "cancelled"];
 const TONE = { queued: "", running: "run", blocked: "orange", failed: "bad", done: "ok", cancelled: "", pending: "", skipped: "" };
@@ -162,8 +163,10 @@ function sessionsTab(d) {
   const a = atts[i];
   return `<label class="fld"><span>Session</span><select id="lsess">${atts.map((x, k) => `<option value="${k}" ${k === i ? "selected" : ""}>${k}. ${esc(x.role)} - ${esc(String(x.created_at).slice(0, 16).replace("T", " "))} - ${esc(x.context === "fresh" ? "Fresh" : x.context)}</option>`).join("")}</select></label>
   <div class="sessgrid"><span>Runner</span><span>${esc(a.dispatcher === "copilot" ? "GitHub Copilot CLI" : "Muse CLI")}</span><span>Session</span><span>${esc(a.session_id || "—")}</span><span>Agent</span><span>${esc(a.role)} · step ${a.pos + 1} · attempt ${a.attempt}</span><span>Model</span><span>${esc(a.model || "default")}</span><span>Workspace</span><span>${esc(a.workspace)}</span><span>Context</span><span>${esc(a.context)}</span><span>Status</span><span>${esc(a.status)}${a.exit_code != null ? ` · exit ${a.exit_code}` : ""}${a.duration_ms ? ` · ${(a.duration_ms / 1000).toFixed(1)}s` : ""}</span>${a.error ? `<span>Error</span><span>${esc(a.error)}</span>` : ""}</div>
-  <div class="vtoggles">${fileBtn(a.id, "transcript", "Transcript")}${fileBtn(a.id, "prompt", "Prompt")}${fileBtn(a.id, "result", "Result JSON")}</div>
-  ${fileBox(a.id, "transcript")}${fileBox(a.id, "prompt")}${fileBox(a.id, "result")}`;
+  <div class="vtoggles">${fileBtn(a.id, "transcript", "Raw transcript")}${fileBtn(a.id, "prompt", "Prompt")}${fileBtn(a.id, "result", "Result JSON")}</div>
+  ${fileBox(a.id, "transcript")}${fileBox(a.id, "prompt")}${fileBox(a.id, "result")}
+  <div class="lsec-h">${icon("terminal")} Session</div>
+  <div data-chatload="loop:${esc(a.id)}">${chatView(S.chats?.[`loop:${a.id}`] || { loading: true }, `loop:${a.id}`)}</div>`;
 }
 
 export function loopDetailPane(d) {

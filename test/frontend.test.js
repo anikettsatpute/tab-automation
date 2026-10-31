@@ -105,13 +105,14 @@ const sliceFn = (src, start, end) => src.slice(src.indexOf(start), end ? src.ind
 test("loop board: selection keeps the list mounted behind the drawer", () => {
   const source = sliceFn(boardSrc, "export function boardView");
   const state = { sel: "t1", boardTab: "tasks", loopTasks: [{ id: "t1" }], tasks: [] };
-  const view = new Function("S", "esc", "icon", "automationRuns", "automationRunsView", "filteredLoopTasks", "loopBanners", "loopBoard", "loopBoardHead", "loopDrawer", `${source}; return boardView;`)(state, escHtml, () => "", () => [], () => "RUNS", () => state.loopTasks, () => "BANNERS", () => "LIST", () => "HEAD", () => "DRAWER");
+  const view = new Function("S", "esc", "icon", "automationRuns", "automationRunsView", "runsHead", "filteredLoopTasks", "loopBanners", "loopBoard", "loopBoardHead", "loopDrawer", `${source}; return boardView;`)(state, escHtml, () => "", () => [], () => "RUNS", () => "RHEAD", () => state.loopTasks, () => "BANNERS", () => "LIST", () => "HEAD", () => "DRAWER");
   const html = view();
   for (const k of ["BANNERS", "HEAD", "LIST", "DRAWER", 'data-btab="tasks"', 'data-btab="runs"', "Board view"]) assert.ok(html.includes(k), k);
   state.sel = null;
   assert.ok(!view().includes("DRAWER"), "no drawer without a selection");
   state.boardTab = "runs";
   assert.match(view(), /RUNS/);
+  assert.match(view(), /runs-wrap[\s\S]*RHEAD/, "runs tab has its own spaced header");
   assert.ok(!view().includes("LIST"), "runs tab replaces the loop list");
 });
 
@@ -143,6 +144,25 @@ test("automation runs tab renders run pipelines, not flow definitions", () => {
   assert.ok(runsSrc.includes("data-rstep"), "expandable step outputs");
   assert.ok(!runsSrc.includes("data-runflow") && !runsSrc.includes("flowcard"), "no flow definition cards");
   assert.ok(mainSrc.includes("$$(\"[data-rsel]\")"), "run selection wired");
+});
+
+test("session chat: loop + automation sessions render CLI-style transcripts", () => {
+  const chatSrc = readFileSync("dashboard-app/src/views/chat.js", "utf8");
+  const runsSrc = readFileSync("dashboard-app/src/views/runs.js", "utf8");
+  assert.ok(chatSrc.includes("data-chatopen") && chatSrc.includes('class="ccmd"'), "collapsible tool cards with command");
+  assert.ok(chatSrc.includes("${esc(it.output)}") && chatSrc.includes("${esc(it.command)}"), "tool output escaped");
+  assert.ok(chatSrc.includes('chat.format === "text"'), "plain-text fallback for old transcripts");
+  assert.ok(loopSrc.includes('data-chatload="loop:'), "loop Sessions tab mounts the chat");
+  assert.ok(runsSrc.includes('data-rtab=') && runsSrc.includes("sessionsPane"), "run drawer has a Sessions tab");
+  assert.ok(mainSrc.includes("/sessions/${encodeURIComponent(b)}/export") && mainSrc.includes("/attempts/${encodeURIComponent(a)}/chat"), "chats fetched from both session sources");
+});
+
+test("nav: Messages (not Brain messages), no Outbox tab", () => {
+  const shellSrc = readFileSync("dashboard-app/src/views/shell.js", "utf8");
+  assert.ok(shellSrc.includes('["brain", "Messages"'), "renamed nav item");
+  assert.ok(!shellSrc.includes('"Outbox"') && !panelsSrc.includes("Go to Outbox"), "outbox nav + palette removed");
+  assert.ok(!mainSrc.includes("outboxView") && !panelsSrc.includes("export function outboxView"), "outbox view removed");
+  assert.ok(!mainSrc.includes("runSelgFull") && !mainSrc.includes("retroView();ogline"), "no corrupted handlers");
 });
 
 test("pipeline mermaid strips unsafe label characters", () => {

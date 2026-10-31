@@ -14,7 +14,7 @@ import {
   OctagonPause, Paperclip, Pause, Play, Plus, RefreshCw, Repeat, RotateCcw,
   Rss, Save, ScrollText, Search, Send, Server, Settings2, ShieldCheck, Siren,
   SunMoon, Terminal, Timer, Trash2, Waves, WifiOff, Workflow, Wrench, X,
-  XCircle, Zap,
+  XCircle, Zap, User, Pencil, FilePlus, Globe, ChevronsUpDown,
 } from "lucide";
 
 // Named map only — never import the full `icons` registry (2000+ entries).
@@ -36,7 +36,8 @@ const NODES = {
   server: Server, "settings-2": Settings2, "shield-check": ShieldCheck, siren: Siren,
   "sun-moon": SunMoon, terminal: Terminal, timer: Timer, "trash-2": Trash2,
   waves: Waves, "wifi-off": WifiOff, workflow: Workflow, wrench: Wrench, x: X,
-  "x-circle": XCircle, zap: Zap,
+  "x-circle": XCircle, zap: Zap, user: User, pencil: Pencil, "file-plus": FilePlus,
+  globe: Globe, "chevrons-up-down": ChevronsUpDown,
 };
 
 const SVG_ATTRS = {

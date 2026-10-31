@@ -7,8 +7,9 @@ import { sidebar, topbar, accessGate } from "./views/shell.js";
 import { refreshIcons, pageHead, emptyState } from "./views/ui.js";
 import { boardView } from "./views/board.js";
 import { diagramFull } from "./views/loop.js";
+import { wireChat } from "./views/chat.js";
 import { paintDiagrams } from "./views/md.js";
-import { configView, agentsView, toolsView, brainView, requestsView, outboxView, retroView, paintRetroChart, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
+import { configView, agentsView, toolsView, brainView, requestsView, retroView, paintRetroChart, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
 let taskTrap = null;
 let taskTrapSel = null;
 
@@ -72,10 +73,9 @@ function mainHtml() {
   if (v === "todos") return todosView();
   if (v === "automations") return flowsView();
   if (v === "requests") return requestsView();
-  if (v === "outbox") return outboxView();
   if (v === "config") return configView();
   if (v === "activity") return `<div>${pageHead("Activity", "global audit stream")}<div class="card"><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("") || emptyState("activity", "No activity", "Runs and agent actions stream here.")}</div></div></div>`;
-  if (v === "retro") return retroView();ogline
+  if (v === "retro") return retroView();
   if (v === "logs") return logsView();
   if (v === "tools") return toolsView();
   if (v === "agents") return agentsView();
@@ -138,7 +138,11 @@ function wireOnly() {
   $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; S.fromTab = null; $(".side")?.classList.remove("open"); render(); }));
   $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; S.sel = null; S.detail = null; render(); }));
   $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; S.sel = null; S.runSel = null; S.detail = null; render(); }));
-  $$("[data-rsel]").forEach((b) => (b.onclick = () => { S.runSel = b.dataset.rsel; S.openSteps = new Set(); render(); }));
+  $$("[data-rsel]").forEach((b) => (b.onclick = () => { S.runSel = b.dataset.rsel; S.openSteps = new Set(); S.runTab = "overview"; S.runSessIdx = -1; render(); }));
+  $$("[data-rtab]").forEach((b) => (b.onclick = () => { S.runTab = b.dataset.rtab; if (S.runTab === "sessions") loadRunDetail(S.runSel); render(); }));
+  const rss = $("#rsess"); if (rss) rss.onchange = () => { S.runSessIdx = Number(rss.value); render(); };
+  wireChat($$, render);
+  loadVisibleChats();
   $$("[data-rstep]").forEach((b) => (b.onclick = () => { const p = Number(b.dataset.rstep); S.openSteps.has(p) ? S.openSteps.delete(p) : S.openSteps.add(p); render(); }));
   $$("[data-dtab]").forEach((b) => (b.onclick = () => { S.detailTab = b.dataset.dtab; render(); }));
   $$("[data-sel]").forEach((b) => (b.onclick = () => openTask(b.dataset.sel)));
@@ -196,8 +200,6 @@ function wireOnly() {
   const bm = $("#brain-more"); if (bm) bm.onclick = () => { S.brainLimit = (S.brainLimit || 30) + 30; render(); };
   $$("[data-btab2]").forEach((b) => (b.onclick = () => { S.brainTab = b.dataset.btab2; render(); }));
   const bq = $("#brain-q"); if (bq) { bq.oninput = () => { S.brainQ = bq.value; }; bq.onchange = () => render(); }
-  const ob = $("#ob-add"); if (ob) ob.onclick = async () => { const i = $("#ob-in"); const t = i.value.trim(); if (!t) return; await api("/api/control/outbox", { method: "POST", body: JSON.stringify({ text: t }) }); tick(true); };
-  $$("[data-obsent]").forEach((b) => (b.onclick = async () => { await api("/api/control/outbox/sent", { method: "POST", body: JSON.stringify({ id: b.dataset.obsent }) }); tick(true); }));
   // flows editor wiring (reference: spec AutomationsView — templates, trigger, palette, feedback)
   const TPL_FLOWS = {
     triage: { id: "triage-blocked", title: "Triage every blocked task", description: "When a task blocks, an investigator agent reads the evidence and posts a summary to the outbox.", trigger_type: "event", trigger_config: { rule: "on task blocked" }, steps: [{ id: "investigate", type: "run_agent", agent: "assistant", title: "Investigate block", prompt: "Read the blocked task evidence and summarize root cause." }, { id: "notify", type: "notify", title: "Post to outbox", message: "Blocked task triage: {{steps.investigate}}" }] },
@@ -458,6 +460,29 @@ function wireLoopDetail() {
   const ls = $("#lsess"); if (ls) ls.onchange = () => { S.sessIdx = Number(ls.value); render(); };
   const lg = $("#lgroup"); if (lg) lg.onclick = () => { S.groupBy = S.groupBy === "status" ? "" : "status"; render(); };
 }
+// Session chats load lazily: any rendered [data-chatload] placeholder fetches once (cached in S.chats).
+// Keys: loop:<attemptId> -> loop attempt transcript; run:<runId>:<idx> -> `muse export` of a run session.
+const chatInflight = new Set();
+function loadVisibleChats() {
+  $$("[data-chatload]").forEach((el) => {
+    const key = el.dataset.chatload;
+    if (S.chats[key] || chatInflight.has(key)) return;
+    chatInflight.add(key);
+    const [kind, a, b] = key.split(":");
+    const url = kind === "loop" ? `${LOOP}/tasks/${encodeURIComponent(S.sel)}/attempts/${encodeURIComponent(a)}/chat` : `/api/control/task/${encodeURIComponent(a)}/sessions/${encodeURIComponent(b)}/export`;
+    api(url, {}, { timeoutMs: 60000 })
+      .then((r) => { S.chats[key] = r.chat || { format: "none", items: [], meta: {} }; })
+      .catch((e) => { S.chats[key] = { error: `Session unavailable: ${e.message}` }; })
+      .finally(() => { chatInflight.delete(key); render(); });
+  });
+}
+async function loadRunDetail(id) {
+  if (!id || S.runDetail?.id === id) return;
+  try {
+    const r = await api(`/api/control/task/${encodeURIComponent(id)}`);
+    if (S.runSel === id) { S.runDetail = r.task || { id, sessions: [] }; render(); }
+  } catch { if (S.runSel === id) { S.runDetail = { id, sessions: [] }; render(); } }
+}
 // Versioned, abortable detail fetch: rapid clicks never show a stale record.
 async function loadDetail(id) {
   if (!id) return;
@@ -469,6 +494,7 @@ async function loadDetail(id) {
     const r = await api(`${LOOP}/tasks/${encodeURIComponent(id)}`, {}, { signal: ctrl.signal });
     if (ver !== S.detailVer || S.sel !== id) return; // superseded
     if (!r.task) throw new Error("Task details were not returned by the server.");
+    for (const a of r.attempts || []) if (a.status === "running") delete S.chats[`loop:${a.id}`];
     S.detail = r; render(true);
   } catch (error) {
     if (ver !== S.detailVer || S.sel !== id) return;
@@ -684,9 +710,10 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") {
     if (S.cmdOpen) { S.cmdOpen = false; render(); }
     else if (S.showReq) { S.showReq = false; render(); }
-    else if (S.dia || S.runSelgFull) { S.diagFull = false; render(); }
+    else if (S.diagFull) { S.diagFull = false; render(); }
     else if (S.flowEdit) { S.flowEdit = null; render(); }
     else if (S.sel) { closeTaskDetail(); }
+    else if (S.runSel) { closeTaskDetail(); }
   } else if (S.cmdOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
     e.preventDefault();
     const n = $$("[data-cmd]").length || 1;

@@ -4,16 +4,15 @@ import { icon } from "./ui.js";
 
 export const NAV_ITEMS = [
   ["board", "Board", "layout-dashboard"],
-  ["brain", "Brain messages", "brain"], ["todos", "TODOs", "list-checks"],
+  ["brain", "Messages", "messages-square"], ["todos", "TODOs", "list-checks"],
   ["automations", "Automations", "workflow"], ["config", "Configuration", "settings-2"],
-  ["requests", "Requests", "inbox"], ["outbox", "Outbox", "send"],
+  ["requests", "Requests", "inbox"],
   ["activity", "Activity", "activity"], ["retro", "Retro", "bar-chart-3"],
 ];
 
 const NAV_COUNT = () => ({
   board: S.loopTasks.length, brain: (S.brain?.messages?.length ?? S.brain?.metrics?.incoming ?? 0),
   todos: S.todos.filter((t) => t.status === "open").length, automations: S.flows.length, requests: S.loopRequests.length,
-  outbox: S.outbox.length,
 });
 
 const STATUS_ROWS = [["running", "Running", "run", "loader"], ["queued", "Queued", "", "clock"], ["blocked", "Blocked", "orange", "octagon-alert"], ["failed", "Failed", "bad", "x-circle"], ["done", "Done", "ok", "check-circle-2"], ["cancelled", "Cancelled", "", "circle-dashed"]];
