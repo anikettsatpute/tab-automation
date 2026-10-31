@@ -5,23 +5,25 @@ export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 export const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export const S = {
-  view: "board", boardTab: "attention", detailTab: "overview", sel: null, detail: null, fromTab: null,
+  view: "board", detailTab: "overview", sel: null, detail: null, fromTab: null,
   kindFilter: "all", lastOk: 0,
   cfg: { enabled: true, refreshSec: 3 },
   ov: null, tasks: [], agents: [], tools: [], activity: [], logs: [],
   approvals: [], todos: [], reminders: [], feed: null, brain: null, flows: [],
   requests: [], outbox: [], retro: null,
   auth: { checked: false, required: false, local: true, via: null, busy: false, error: "", token: "" },
-  q: "", auto: true, timer: null, logLevel: "", showReq: false, reqMode: "request",
-  reqAgents: ["assistant"], reqStream: "general", reqPipeline: "", reqBusy: false, reqMsg: "",
-  reqAttachNote: "Text-only uploads (.txt/.md/.json/.csv, 4KB/file, 3 files max). Content is pasted into step-1 context at intake.",
+  q: "", timer: null, logLevel: "", showReq: false, reqMode: "request",
+  reqDispatcher: "muse", reqModel: "", reqTaskType: "", reqRepo: "", reqText: "", reqBusy: false, reqMsg: "",
+  reqAttachNote: "Text-only uploads (.txt/.md/.json/.csv, 4KB/file, 3 files max). Copied into every task workspace under attachments/.",
   reqAttachments: [], reqAttachBusy: false, reqAttachErr: "", reqDraftRestored: false,
   expandedSteps: new Set(), expandedVariants: new Set(), rerunText: "",
   brainSel: null, brainTab: "details", brainQ: "", brainLimit: 30, brainFocusReturn: null, flowSel: null,
   flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "", flowRule: "",
   flowMsg: "", flowDryBusy: false, flowDryResult: null, cfgData: null, cfgMsg: "",
-  loopTasks: [], loopSel: null, loopDetail: null, loopForm: null, todoForm: false,
-  taskTypes: [],
+  // OrchestratorLoop: tasks/counts/engine from /api/control/loop/*.
+  loopTasks: [], loopCounts: {}, loopEngine: null, loopRequests: [], loopActivity: [],
+  dispatchers: [], loopTypes: [], loopAgents: [], todoForm: false,
+  openSteps: new Set(), files: {}, handoff: null, appendForm: false, boardTab: "tasks",
   cmdOpen: false, cmdIdx: 0, theme: "dark",
   groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all", showTypes: false,
   showCtx: false, sessIdx: 0, sessExport: null, sessToolFilter: "all", diagFull: false, reqChanges: "", appendTitle: "",
@@ -35,12 +37,10 @@ export const S = {
   feedVersion: null, sseConnected: false,
 };
 
-// Agent pipeline: OUR agents from config/agents.json are the pipeline.
-// Streams group agents; pipelines chain agent->agent. Divider picks stream+pipeline.
-// NOTE: keep in sync with config/agents.json ids (scout/analyst/critic/writer/tester added).
+// Fallback agent ids for the flow editor until /api/control/loop/agents loads.
 export const AGENT_OPTS = ["assistant", "summarizer", "coder", "finance-india", "finance-us", "scout", "analyst", "critic", "writer", "tester"];
+export const agentIds = () => (S.loopAgents?.length ? S.loopAgents.map((a) => a.id) : AGENT_OPTS);
 export const streamName = (id) => (S.cfgData?.streams?.streams || []).find((s) => s.id === id)?.name || id;
-export const streamPipes = (sid) => (S.cfgData?.streams?.pipelines || []).filter((p) => !sid || p.stream === sid);
 
 // Abortable, version-tolerant API client. Returns { data, status } via api(),
 // or throws ApiError with .status/.body so callers can render field errors.
@@ -252,8 +252,8 @@ export function saveReqDraft() {
   try {
     const draft = {
       text: String($("#req-text")?.value || "").slice(0, 4000),
-      mode: S.reqMode, stream: S.reqStream, pipeline: S.reqPipeline,
-      agents: (S.reqAgents || []).slice(0, 10),
+      mode: S.reqMode, dispatcher: S.reqDispatcher, model: S.reqModel,
+      taskType: S.reqTaskType, repo: S.reqRepo,
       at: Date.now(),
     };
     // Refuse to persist anything that looks like a credential.
@@ -270,9 +270,10 @@ export function restoreReqDraft() {
     const d = JSON.parse(raw);
     if (!d || typeof d !== "object") return false;
     if (d.mode === "request" || d.mode === "direct") S.reqMode = d.mode;
-    if (typeof d.stream === "string" && d.stream) S.reqStream = d.stream;
-    if (typeof d.pipeline === "string") S.reqPipeline = d.pipeline;
-    if (Array.isArray(d.agents) && d.agents.length) S.reqAgents = d.agents.filter((a) => AGENT_OPTS.includes(a)).slice(0, 10) || S.reqAgents;
+    if (d.dispatcher === "muse" || d.dispatcher === "copilot") S.reqDispatcher = d.dispatcher;
+    if (typeof d.model === "string") S.reqModel = d.model.slice(0, 64);
+    if (typeof d.taskType === "string") S.reqTaskType = d.taskType.slice(0, 64);
+    if (typeof d.repo === "string") S.reqRepo = d.repo.slice(0, 500);
     const t = typeof d.text === "string" ? d.text.slice(0, 4000) : "";
     // Apply text after render (caller sets #req-text value).
     S._draftText = /CONTROL_TOKEN|tab_session|Bearer\s+\S{8,}|sk-(live|ant)|xox[baprs]-/i.test(t) ? "" : t;

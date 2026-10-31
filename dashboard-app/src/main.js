@@ -2,10 +2,12 @@
 // View modules own markup; this file owns composition + behavior.
 import "./style.css";
 import { createFocusTrap } from "focus-trap";
-import { S, $, $$, esc, api, postJob, jobRunId, regionHash, streamPipes, setStatus, refreshAuthStatus, loginWithToken, logoutSession, saveReqDraft, restoreReqDraft, clearReqDraft } from "./views/state.js";
+import { S, $, $$, esc, api, postJob, jobRunId, regionHash, setStatus, refreshAuthStatus, loginWithToken, logoutSession, saveReqDraft, restoreReqDraft, clearReqDraft } from "./views/state.js";
 import { sidebar, topbar, accessGate } from "./views/shell.js";
 import { refreshIcons, pageHead, emptyState } from "./views/ui.js";
-import { boardView, detailPane } from "./views/board.js";
+import { boardView } from "./views/board.js";
+import { diagramFull } from "./views/loop.js";
+import { paintDiagrams } from "./views/md.js";
 import { configView, agentsView, toolsView, brainView, requestsView, outboxView, retroView, paintRetroChart, flowsView, todosView, logsView, reqModal, cmdPalette } from "./views/panels.js";
 let taskTrap = null;
 let taskTrapSel = null;
@@ -41,8 +43,8 @@ function mountTaskDrawer() {
 }
 
 function closeTaskDetail() {
-  if (S.fromTab) S.boardTab = S.fromTab;
-  S.fromTab = null; S.sel = null; S.detail = null;
+  S.sel = null; S.detail = null; S.diagFull = false; S.appendForm = false; S.confirmDel = false;
+  S.handoff = null; S.files = {}; S.openSteps = new Set();
   render();
 }
 // Keyed, focus-preserving render: sidebar/topbar/main/modals update independently.
@@ -65,7 +67,6 @@ function mainHtml() {
   if (S.auth.required) return accessGate();
   const v = S.view;
   if (v === "board") return boardView();
-  if (v === "assistant") return `<div class="card"><h3>Assistant</h3><div class="chatbox"><input id="chat-in" placeholder='Ask Rick…'><button class="btn primary sm" id="chat-send">Send</button></div><div class="feed">${(S.feed?.messages || []).slice(-10).map((m) => `<div class="fmsg ${m.kind === "chat" ? "user" : "rick"}">${esc(m.text)}</div>`).join("")}</div></div>`;
   if (v === "brain") return brainView();
   if (v === "todos") return todosView();
   if (v === "automations") return flowsView();
@@ -73,7 +74,7 @@ function mainHtml() {
   if (v === "outbox") return outboxView();
   if (v === "config") return configView();
   if (v === "activity") return `<div>${pageHead("Activity", "global audit stream")}<div class="card"><div class="logbox">${(S.activity || []).map((a) => `<div class="lrow info"><span class="lt">${esc(String(a.created_at || "").slice(5, 16).replace("T", " "))}</span><span class="ltag">${esc(a.action)}</span><span class="lsrc">${esc(a.actor || "")}</span><span>${esc(String(a.detail || "").slice(0, 160))}</span></div>`).join("") || emptyState("activity", "No activity", "Runs and agent actions stream here.")}</div></div></div>`;
-  if (v === "retro") return retroView();
+  if (v === "retro") return retroView();ogline
   if (v === "logs") return logsView();
   if (v === "tools") return toolsView();
   if (v === "agents") return agentsView();
@@ -100,8 +101,9 @@ function render(background = false) {
   renderRegion("#rg-side", sidebar());
   renderRegion("#rg-top", topbar());
   renderRegion("#rg-main", mainHtml());
-  renderRegion("#rg-modals", `${reqModal()}${cmdPalette()}${brainDrawerLive()}`);
+  renderRegion("#rg-modals", `${reqModal()}${cmdPalette()}${S.sel ? diagramFull(S.detail) : ""}`);
   mountTaskDrawer();
+  paintDiagrams();
   const st = $("#status"); if (st && st.textContent !== (S.statusMsg || "")) st.textContent = S.statusMsg || "";
   [...document.querySelectorAll(".blist, .bdetail, .tdrawer, .blist-col, .logbox, .dscroll, .transcript")].forEach((el, i) => { const k = el.className + i; if (scrolls.has(k)) el.scrollTop = scrolls.get(k); });
   refreshIcons();
@@ -109,8 +111,6 @@ function render(background = false) {
   if (activeId) { const back = document.getElementById(activeId); if (back) { back.focus({ preventScroll: true }); try { if (selStart != null && back.setSelectionRange) back.setSelectionRange(selStart, selEnd); } catch {} } }
   wireOnly();
 }
-// Brain drawer live region mount (focus-trapped dialog content lives in panels.js).
-function brainDrawerLive() { return ""; }
 
 function wireOnly() {
   const menu = $("#menu");
@@ -136,38 +136,14 @@ function wireOnly() {
   if (lo) lo.onclick = async () => { closeFeedStream(); await logoutSession(); render(); };
   $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; S.fromTab = null; $(".side")?.classList.remove("open"); render(); }));
   $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; S.sel = null; S.detail = null; render(); }));
-  $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; S.sel = null; S.detail = null; S.loopSel = null; S.loopDetail = null; render(); }));
-  $$("[data-types]").forEach((b) => (b.onclick = () => { S.showTypes = !S.showTypes; render(); }));
+  $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; S.sel = null; S.detail = null; render(); }));
   $$("[data-dtab]").forEach((b) => (b.onclick = () => { S.detailTab = b.dataset.dtab; render(); }));
-  $$("[data-sel]").forEach((b) => (b.onclick = async () => { S.fromTab = S.boardTab; S.sel = b.dataset.sel; S.detail = null; S.detailError = ""; S.detailTab = "overview"; S.sessIdx = 0; S.sessExport = null; render(); loadDetail(S.sel); }));
+  $$("[data-sel]").forEach((b) => (b.onclick = () => openTask(b.dataset.sel)));
+  $$("[data-gotask]").forEach((b) => (b.onclick = () => { S.view = "board"; S.boardTab = "tasks"; openTask(b.dataset.gotask); }));
   const retryDetail = $("#detail-retry"); if (retryDetail) retryDetail.onclick = () => loadDetail(S.sel);
-  const back = $("#dback"); if (back) back.onclick = () => closeTaskDetail();
   const dc = $("#dclose"); if (dc) dc.onclick = () => closeTaskDetail();
   const backdrop = $("[data-drawer-backdrop]"); if (backdrop) backdrop.onclick = () => closeTaskDetail();
-  // loop task tables wiring
-  $$("[data-loop]").forEach((b) => (b.onclick = async () => { S.loopSel = b.dataset.loop; S.loopDetail = null; render(); loadLoopDetail(S.loopSel); }));
-  const lb = $("#loopback"); if (lb) lb.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
-  const lx = $("#loopx"); if (lx) lx.onclick = () => { S.loopSel = null; S.loopDetail = null; render(); };
-  const ln = $("#loopnew"); if (ln) ln.onclick = () => { S.loopForm = { title: "" }; render(); const inp = $("#loop-title"); if (inp) inp.focus(); };
-  const lc = $("#loopcancel"); if (lc) lc.onclick = () => { S.loopForm = null; render(); };
-  const ls = $("#loopcreate"); if (ls) ls.onclick = async () => { const inp = $("#loop-title"); const t = inp ? inp.value.trim() : ""; if (!t) { setStatus("Loop task needs a title."); return; } const r = await api("/api/control/loop-tasks", { method: "POST", body: JSON.stringify({ title: t, repo: "tab-automation", task_type: "assistant", status: "open" }) }); S.loopForm = null; S.loopSel = r.id; tick(true); };
-  $$("[data-loopx]").forEach((b) => (b.onclick = () => { const k = "L" + b.dataset.loopx; S.expandedSteps.has(k) ? S.expandedSteps.delete(k) : S.expandedSteps.add(k); render(); }));
-  $$("[data-looprun]").forEach((b) => (b.onclick = async () => {
-    const i = +b.dataset.looprun; const d = S.loopDetail; if (!d) return;
-    const s = (d.steps || [])[i]; if (!s) return;
-    const ag = $(`#loop-agent-${i}`); const mo = $(`#loop-model-${i}`); const pr = $(`#loop-prompt-${i}`);
-    b.disabled = true; b.textContent = "⏳ Dispatching…";
-    try {
-      // Backend returns 202 { jobId } (async) — poll the job, then reload steps.
-      const { sync, final } = await postJob(`/api/control/loop-tasks/${d.task.id}/dispatch`, { agent: ag ? ag.value : s.agent, model: mo ? mo.value : (s.model || ""), prompt: pr ? pr.value : (s.prompt || ""), stepId: s.step_id });
-      const jobId = sync?.jobId || final?.job?.id || null;
-      S.cfgMsg = ""; S.loopDetail = null;
-      setStatus(jobId ? `Dispatched ${ag ? ag.value : s.agent} → job ${String(jobId).slice(0, 8)}.` : `Dispatched ${ag ? ag.value : s.agent} — done.`);
-      tick(true);
-    } catch (e) { b.disabled = false; b.textContent = `Dispatch`; setStatus(`Dispatch failed: ${e.message}`); }
-  }));
-  const la = $("#loopadd"); if (la) la.onclick = () => { if (!S.loopDetail) return; S.loopDetail.steps = [...(S.loopDetail.steps || []), { step_id: `step-${(S.loopDetail.steps || []).length + 1}`, type: "agent", agent: "assistant", model: "", status: "pending", prompt: "", output: "" }]; render(); };
-  const lsv = $("#loopsave"); if (lsv) lsv.onclick = async () => { if (!S.loopDetail) return; const steps = (S.loopDetail.steps || []).map((s, i) => { const ag = $(`#loop-agent-${i}`); const mo = $(`#loop-model-${i}`); const pr = $(`#loop-prompt-${i}`); return { ...s, agent: ag ? ag.value : s.agent, model: mo ? mo.value : s.model, prompt: pr ? pr.value : s.prompt }; }); await api(`/api/control/loop-tasks/${S.loopDetail.task.id}`, { method: "POST", body: JSON.stringify({ steps }) }); S.loopDetail = null; tick(true); };
+  wireLoopDetail();
   // config view wiring
   $$("[data-cprov]").forEach((el) => (el.onchange = () => { if (S.cfgData?.providers?.providers?.[+el.dataset.cprov]) S.cfgData.providers.providers[+el.dataset.cprov][el.dataset.cf] = el.value; }));
   $$("[data-cagent]").forEach((el) => (el.onchange = () => { if (S.cfgData?.agents?.agents?.[+el.dataset.cagent]) S.cfgData.agents.agents[+el.dataset.cagent][el.dataset.cf] = el.value; }));
@@ -195,113 +171,21 @@ function wireOnly() {
     } catch (e) { setStatus(`Flow run failed: ${e.message}`); }
     finally { b.disabled = false; b.textContent = label; }
   }));
-  $$("[data-tasklaunch]").forEach((b) => (b.onclick = async () => {
-    const id = b.dataset.tasklaunch; const inp = $(`#task-goal-${id}`); const out = $(`#task-out-${id}`);
-    const goal = inp ? inp.value.trim() : "";
-    if (!goal) { setStatus("Task needs a goal — describe the bug or feature."); if (inp) inp.focus(); return; }
-    b.disabled = true; b.textContent = "Launching…";
-    if (out) out.innerHTML = `<p class="hint">Launching ${esc(id)} — spawning sessions per agent…</p>`;
-    try {
-      // Backend returns 202 { jobId } (async) — poll the job for the run id.
-      const { sync, final } = await postJob(`/api/control/task-types/${id}/launch`, { goal });
-      const taskId = sync?.taskId || final?.taskId || null;
-      const runId = jobRunId(final, sync);
-      if (out) out.innerHTML = `<div class="notice ok">Launched task <span class="kbd">${esc(taskId || "?")}</span>${runId ? ` → run <span class="kbd">${esc(runId)}</span>` : " — run starts when the worker claims the job."} (${((sync?.agents || final?.agents) || []).join(" → ")}). Watch it move below.</div>`;
-      setStatus(taskId ? `Task launched: ${taskId}` : "Task launched.");
-      tick(true);
-    } catch (e) { b.disabled = false; b.textContent = `Launch`; if (out) out.innerHTML = `<div class="status bad" role="alert">${esc(e.message)}</div>`; }
-  }));
-  $$("[data-xstep]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xstep; S.expandedSteps.has(i) ? S.expandedSteps.delete(i) : S.expandedSteps.add(i); render(); }));
-  $$("[data-xvar]").forEach((b) => (b.onclick = () => { const i = +b.dataset.xvar; S.expandedVariants.has(i) ? S.expandedVariants.delete(i) : S.expandedVariants.add(i); render(); }));
-  $$("[data-ctx]").forEach((b) => (b.onclick = () => { S.showCtx = !S.showCtx; render(); }));
-  $$("[data-rqstep]").forEach((b) => (b.onclick = async () => {
-    const i = +b.dataset.rqstep; const ta = $(`#rerun-${i}`); const guidance = ta ? ta.value : "";
-    b.disabled = true; b.textContent = "⏳ Re-queuing…";
-    try {
-      // Backend returns 202 { jobId } (async) — poll the job for the run id.
-      const { sync, final } = await postJob(`/api/control/task/${S.sel}/requeue`, { stepIndex: i, guidance });
-      const runId = jobRunId(final, sync);
-      if (runId) { S.sel = runId; }
-      S.detail = null; setStatus(runId ? `Re-queued → run ${String(runId).slice(0, 8)}.` : "Re-queued."); tick(true);
-    } catch (e) {
-      b.disabled = false; b.textContent = `Re-queue from step ${i + 1}`;
-      if (e?.status === 429) setStatus(`Re-queue denied: restart budget exceeded — task blocked. ${e.message}`);
-      else setStatus(`Re-queue failed: ${e.message}`);
-    }
-  }));
-  $$("[data-act]").forEach((b) => (b.onclick = async () => {
-    const a = b.dataset.act; const box = $("#actbox");
-    if (!S.sel) return;
-    if (a === "req-changes") {
-      if (box) box.innerHTML = `<div class="chatbox"><input id="rc-in" placeholder="Review feedback for the agent…"><button class="btn sm primary" id="rc-go">Send</button></div>`;
-      const go = $("#rc-go"); if (go) go.onclick = async () => { const t = $("#rc-in").value.trim(); if (!t) return; await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: "request-changes", text: t }) }); S.detail = null; tick(true); };
-      return;
-    }
-    if (a === "append") {
-      if (box) box.innerHTML = `<div class="chatbox"><input id="ap-in" placeholder="Follow-up task title…"><button class="btn sm primary" id="ap-go">Append</button></div>`;
-      const go = $("#ap-go"); if (go) go.onclick = async () => { const t = $("#ap-in").value.trim(); if (!t) return; await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: "append", title: t }) }); S.detail = null; tick(true); };
-      return;
-    }
-    if (a === "requeue") { S.detailTab = "steps"; render(); return; }
-    if (a === "done" || a === "block") {
-      const label = a === "done" ? "Mark done" : "Block";
-      if (box) box.innerHTML = `<div class="chatbox"><input id="ab-in" placeholder="${a === "done" ? "Resolution note (optional)…" : "Why is this blocked? (goes to outbox)…"}"><button type="button" class="btn sm primary" id="ab-go">${label}</button></div>`;
-      const go = $("#ab-go"); if (go) go.onclick = async () => {
-        const t = $("#ab-in").value.trim();
-        go.disabled = true; go.textContent = "Saving…";
-        try {
-          await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: a, text: t }) });
-          S.detail = null; tick(true);
-        } catch (e) { go.disabled = false; go.textContent = label; setStatus(`${label} failed: ${e.message}`); }
-      };
-      return;
-    }
-    const map = { del: "delete" };
-    if (map[a]) {
-      if (a === "del" && !S.confirmDel) { S.confirmDel = true; render(); setStatus("Press Delete again to confirm."); setTimeout(() => { S.confirmDel = false; }, 4000); return; }
-      S.confirmDel = false;
-      await api(`/api/control/task/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action: map[a] }) });
-      if (a === "del") { S.sel = null; S.detail = null; }
-      else S.detail = null;
-      tick(true);
-    }
-  }));
-  const df = $("#diagfull"); if (df) df.onclick = () => { S.diagFull = true; render(); };
-  const dx = $("#diagx"); if (dx) dx.onclick = () => { S.diagFull = false; render(); };
-  const ss = $("#sesssel"); if (ss) ss.onchange = () => { S.sessIdx = Number(ss.value); S.sessExport = null; render(); };
-  const st2 = $("#sesstool"); if (st2) st2.onchange = () => { S.sessToolFilter = st2.value; render(); };
-  $$("[data-sesspick]").forEach((b) => (b.onclick = () => { S.sessIdx = Number(b.dataset.sesspick); S.sessExport = null; render(); }));
-  // Open = select + honestly load the real transcript via the export endpoint.
-  // Never spawns a model or falls back to another provider — read-only `muse export`.
-  async function openSession(idx) {
-    S.sessIdx = idx; S.sessExport = { idx, loading: true };
-    render();
-    try {
-      const r = await api(`/api/control/task/${S.sel}/sessions/${idx}/export`);
-      S.sessExport = { idx, loading: false, ...r };
-    } catch (e) { S.sessExport = { idx, loading: false, error: e.message }; }
-    render();
-  }
-  $$("[data-sessopen]").forEach((b) => (b.onclick = () => openSession(Number(b.dataset.sessopen))));
-  $$("[data-sessexp]").forEach((b) => (b.onclick = () => openSession(Number(b.dataset.sessexp))));
   const sb = $("#sortby"); if (sb) sb.onchange = () => { S.sortBy = sb.value; render(); };
-  const kf = $("#kindf"); if (kf) kf.onchange = () => { S.kindFilter = kf.value; render(); };
   const fq = $("#fq"); if (fq) { fq.oninput = () => { S.q = fq.value; const f2 = $("#fq2"); if (f2 && f2.value !== fq.value) { f2.value = fq.value; } if (S.cmdOpen) render(); }; fq.onchange = () => render(); }
   const fq2 = $("#fq2"); if (fq2) { fq2.oninput = () => { S.q = fq2.value; if (fq) fq.value = fq2.value; }; fq2.onchange = () => render(); }
-  $$("[data-clearf]").forEach((b) => (b.onclick = () => { S.q = ""; S.statusFilter = ""; S.kindFilter = "all"; render(); }));
-  const nt = $("#newtask"); if (nt) nt.onclick = () => { S.showReq = true; restoreReqDraft(); render(); wireReq(); };
-  const nt2 = $("#newtask2"); if (nt2) nt2.onclick = () => { S.showReq = true; restoreReqDraft(); render(); wireReq(); };
-  const cmds = $("#cmds"); if (cmds) cmds.onclick = () => { S.cmdOpen = true; S.cmdIdx = 0; render(); };
+  $$("[data-clearf]").forEach((b) => (b.onclick = () => { S.q = ""; S.statusFilter = ""; render(); }));
+  ["#newtask", "#newtask2", "#newtask3"].forEach((id) => { const b = $(id); if (b) b.onclick = openReq; });
+  ["#cmds", "#cmds2"].forEach((id) => { const b = $(id); if (b) b.onclick = () => { S.cmdOpen = true; S.cmdIdx = 0; render(); }; });
   const cx = $("#cmdx"); if (cx) cx.onclick = () => { S.cmdOpen = false; render(); };
   $$("[data-cmd]").forEach((b) => (b.onclick = () => {
     const v = b.dataset.cmd; S.cmdOpen = false;
-    if (v === "new") { S.showReq = true; restoreReqDraft(); render(); wireReq(); return; }
+    if (v === "new") { openReq(); return; }
     if (v === "refresh") { tick(true); return; }
-    if (v === "pause") { S.paused = !S.paused; render(); arm(); return; }
+    if (v === "pause") { togglePause(); return; }
     S.view = v; S.sel = null; S.detail = null; render();
   }));
-  const rs = $("#resume"); if (rs) rs.onclick = () => { S.paused = !S.paused; render(); arm(); };
-  const at = $("#autotoggle"); if (at) at.onclick = () => { S.auto = !S.auto; render(); arm(); };
+  const rs = $("#resume"); if (rs) rs.onclick = togglePause;
   const rf = $("#refresh"); if (rf) rf.onclick = () => tick(true);
   const th = $("#theme"); if (th) th.onclick = () => { S.theme = S.theme === "dark" ? "light" : "dark"; render(); };
   $$("[data-brain]").forEach((b) => (b.onclick = () => { S.brainFocusReturn = document.activeElement?.id || null; S.brainSel = b.dataset.brain; render(); const x = $("#brainx"); if (x) x.focus({ preventScroll: true }); }));
@@ -387,26 +271,40 @@ function wireOnly() {
     } catch (e) { setStatus(`Convert failed: ${e.message}`); }
   }));
   $$("[data-goto-req]").forEach((b) => (b.onclick = () => { S.view = "requests"; S.q = ""; render(); }));
-  $$("[data-goto-attention]").forEach((b) => (b.onclick = () => { S.view = "board"; S.boardTab = "attention"; render(); }));
   wireReq();
-  const cs = $("#chat-send"); if (cs) cs.onclick = sendChat;
   const ta = $("#todo-add"); if (ta) ta.onclick = async () => { const i = $("#todo-in"); const t = i.value.trim(); if (!t) return; await api("/api/control/todos", { method: "POST", body: JSON.stringify({ text: t }) }); tick(true); };
   const ll = $("#loglevel"); if (ll) ll.onchange = () => { S.logLevel = ll.value; tick(true); };
   const lr = $("#logref"); if (lr) lr.onclick = () => tick(true);
 }
 
+function openReq() {
+  S.showReq = true; restoreReqDraft();
+  if (S._draftText && !S.reqText) { S.reqText = S._draftText; S._draftText = ""; }
+  render(); wireReq(); $("#req-text")?.focus();
+}
+async function togglePause() {
+  const want = !S.paused;
+  try {
+    await api(`${LOOP}/${want ? "pause" : "resume"}`, { method: "POST", body: "{}" });
+    S.paused = want; setStatus(want ? "Loop paused — the running step finishes, nothing new starts." : "Loop resumed.");
+  } catch (e) { setStatus(`Pause/resume failed: ${e.message}`); }
+  render();
+}
+
 function wireReq() {
   const rx = $("#reqx"); if (rx) rx.onclick = () => { S.showReq = false; S.reqMsg = ""; S.reqAttachErr = ""; render(); };
-  const mr = $("#reqm-req"); if (mr) mr.onclick = () => { S.reqMode = "request"; saveReqDraft(); render(); wireReq(); };
-  const md = $("#reqm-dir"); if (md) md.onclick = () => { S.reqMode = "direct"; saveReqDraft(); render(); wireReq(); };
-  $$("[data-reqagent]").forEach((b) => (b.onclick = () => { const a = b.dataset.reqagent; S.reqAgents.includes(a) ? S.reqAgents = S.reqAgents.filter((x) => x !== a) : S.reqAgents.push(a); if (!S.reqAgents.length) S.reqAgents = [a]; saveReqDraft(); render(); wireReq(); }));
-  const rs = $("#req-stream"); if (rs) rs.onchange = () => { S.reqStream = rs.value; S.reqPipeline = ""; saveReqDraft(); render(); wireReq(); };
-  const rp = $("#req-pipe"); if (rp) rp.onchange = () => { S.reqPipeline = rp.value; const p = streamPipes(S.reqStream).find((x) => x.id === rp.value); if (p?.agents?.length) S.reqAgents = [...p.agents]; saveReqDraft(); render(); wireReq(); };
+  const reRender = () => { saveReqDraft(); render(); wireReq(); };
+  const mr = $("#reqm-req"); if (mr) mr.onclick = () => { S.reqMode = "request"; reRender(); };
+  const md = $("#reqm-dir"); if (md) md.onclick = () => { S.reqMode = "direct"; reRender(); };
+  $$("[data-reqdisp]").forEach((b) => (b.onclick = () => { if (b.disabled) return; S.reqDispatcher = b.dataset.reqdisp; reRender(); }));
+  const ty = $("#req-type"); if (ty) ty.onchange = () => { S.reqTaskType = ty.value; reRender(); };
+  const rm = $("#req-model"); if (rm) rm.oninput = () => { S.reqModel = rm.value.trim(); saveReqDraft(); };
+  const rr = $("#req-repo"); if (rr) rr.oninput = () => { S.reqRepo = rr.value.trim(); saveReqDraft(); };
   // Draft restore: non-secret text/preferences only (never uploaded content).
   const rt = $("#req-text");
   if (rt) {
-    if (S._draftText && !rt.value) { rt.value = S._draftText; S._draftText = ""; }
-    rt.oninput = () => saveReqDraft();
+    if (S.reqText && !rt.value) rt.value = S.reqText;
+    rt.oninput = () => { S.reqText = rt.value; saveReqDraft(); };
   }
   // Text-only upload: file input -> read as UTF-8 text -> JSON POST.
   // Binary/executable/html rejected client-side fast AND server-side.
@@ -463,26 +361,19 @@ function wireReq() {
   paintReqAttach();
   const g = $("#req-go"); if (g) g.onclick = async () => {
     const t = $("#req-text").value.trim(); if (!t || S.reqBusy || S.reqAttachBusy || S.reqAttachErr) return;
-    S.reqBusy = true; S.reqMsg = "Divider working… (polling job until completion)"; paintReqAttach();
+    S.reqBusy = true; S.reqMsg = "Filing request…"; paintReqAttach();
     try {
-      const { sync, final } = await postJob("/api/control/requests", { text: t, mode: S.reqMode, stream: S.reqStream, pipeline: S.reqPipeline || undefined, agents: S.reqAgents, attachments: (S.reqAttachments || []).map((a) => a.id) }, { onTick: (j) => { S.reqMsg = `Divider working… job ${j.status || "queued"}`; const m = $("#req-msg"); if (m) m.textContent = S.reqMsg; } });
-      // Backend returns 202 { jobId } (async) — poll the job for the run id.
-      const runId = jobRunId(final, sync);
-      S.reqBusy = false; S.showReq = false; S.reqMsg = "";
+      const r = await api(`${LOOP}/requests`, { method: "POST", body: JSON.stringify({ text: t, mode: S.reqMode, dispatcher: S.reqDispatcher, model: S.reqModel, taskType: S.reqTaskType, repo: S.reqRepo, attachments: (S.reqAttachments || []).map((a) => a.id) }) });
+      S.reqBusy = false; S.showReq = false; S.reqMsg = ""; S.reqText = "";
       S.reqAttachments = []; S.reqAttachErr = "";
       clearReqDraft(); // server acked — draft consumed, never replayed
-      S.view = "board"; S.boardTab = "tasks"; S.sel = runId; S.detail = null;
-      render(); if (runId) loadDetail(runId); else tick(true);
+      S.view = "board"; S.boardTab = "tasks"; S.sel = null; S.detail = null;
+      setStatus(`Request ${String(r.id || "").slice(0, 8)} filed — the divider will break it into tasks.`);
+      render(); refreshLoop();
     } catch (e) { S.reqBusy = false; S.reqMsg = e.message; paintReqAttach(); }
   };
   // Focus trap for modal dialogs: keep Tab inside, return focus on close.
   wireModalFocus();
-}
-
-async function sendChat() {
-  const i = $("#chat-in"); const t = i.value.trim(); if (!t) return; i.value = "";
-  await api("/api/control/chat", { method: "POST", body: JSON.stringify({ text: t }) }).catch(() => {});
-  setTimeout(() => tick(true), 1500);
 }
 
 function wireModalFocus() {
@@ -501,6 +392,69 @@ function wireModalFocus() {
     else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
   };
 }
+// ---------------- OrchestratorLoop task detail wiring ----------------
+const LOOP = "/api/control/loop";
+function openTask(id) {
+  if (!id) return;
+  S.sel = id; S.detail = null; S.detailError = ""; S.detailTab = "overview"; S.sessIdx = 0;
+  S.files = {}; S.openSteps = new Set(); S.handoff = null; S.appendForm = false; S.confirmDel = false; S.diagFull = false;
+  render(); loadDetail(id);
+}
+async function loopAction(action, extra = {}) {
+  if (!S.sel) return;
+  try {
+    await api(`${LOOP}/tasks/${S.sel}/action`, { method: "POST", body: JSON.stringify({ action, ...extra }) });
+    setStatus(`Task ${action.replace("_", " ")}.`);
+    if (action === "delete") { closeTaskDetail(); refreshLoop(); return; }
+    loadDetail(S.sel); refreshLoop();
+  } catch (e) { setStatus(`${action} failed: ${e.message}`); }
+}
+function wireLoopDetail() {
+  $$("[data-lact]").forEach((b) => (b.onclick = () => {
+    const a = b.dataset.lact;
+    if (a === "append") { S.appendForm = !S.appendForm; render(); $("#ap-title")?.focus(); return; }
+    if (a === "requeue") { S.detailTab = "steps"; const d = S.detail; const first = d?.steps?.find((s) => s.status !== "done"); if (first) S.openSteps.add(first.pos); render(); return; }
+    if (a === "delete" && !S.confirmDel) { S.confirmDel = true; render(); setStatus("Press Delete again to confirm."); setTimeout(() => { if (S.confirmDel) { S.confirmDel = false; render(); } }, 4000); return; }
+    S.confirmDel = false;
+    loopAction(a);
+  }));
+  $$("[data-lstep]").forEach((b) => (b.onclick = () => { const p = Number(b.dataset.lstep); S.openSteps.has(p) ? S.openSteps.delete(p) : S.openSteps.add(p); render(); }));
+  $$("[data-lfile]").forEach((b) => (b.onclick = async () => {
+    const key = b.dataset.lfile; const [aid, kind] = key.split(":");
+    if (S.files[key]) { delete S.files[key]; render(); return; }
+    S.files[key] = { loading: true }; render();
+    try { const r = await api(`${LOOP}/tasks/${S.sel}/attempts/${encodeURIComponent(aid)}/${kind}`); S.files[key] = { text: r.text || "" }; }
+    catch (e) { S.files[key] = { error: e.message }; }
+    render();
+  }));
+  $$("[data-lrq]").forEach((b) => (b.onclick = async () => {
+    const pos = Number(b.dataset.lrq); const ta = $(`#lrq-${pos}`);
+    b.disabled = true;
+    try {
+      await api(`${LOOP}/tasks/${S.sel}/requeue`, { method: "POST", body: JSON.stringify({ fromStep: pos, guidance: ta ? ta.value : "" }) });
+      setStatus(`Re-queued from step ${pos + 1}.`); S.files = {}; loadDetail(S.sel); refreshLoop();
+    } catch (e) { b.disabled = false; setStatus(`Re-queue failed: ${e.message}`); }
+  }));
+  const hf = $("#lhandoff"); if (hf) hf.onclick = async () => {
+    if (S.handoff != null) { S.handoff = null; render(); return; }
+    try { const r = await api(`${LOOP}/tasks/${S.sel}/handoff`); S.handoff = r.handoff || ""; } catch (e) { S.handoff = `_Failed to load handoff: ${e.message}_`; }
+    render();
+  };
+  const apc = $("#ap-cancel"); if (apc) apc.onclick = () => { S.appendForm = false; render(); };
+  const apg = $("#ap-go"); if (apg) apg.onclick = async () => {
+    const title = $("#ap-title")?.value.trim(); const goal = $("#ap-goal")?.value.trim(); const role = $("#ap-role")?.value || "coder";
+    if (!title || !goal) { setStatus("Append needs a title and a step goal."); return; }
+    apg.disabled = true;
+    try {
+      const r = await api(`${LOOP}/tasks/${S.sel}/append-task`, { method: "POST", body: JSON.stringify({ title, endGoal: goal, steps: [{ role, goal }], after: !!$("#ap-after")?.checked }) });
+      S.appendForm = false; setStatus(`Appended task ${String(r.id || "").slice(0, 8)}.`); refreshLoop(); render();
+    } catch (e) { apg.disabled = false; setStatus(`Append failed: ${e.message}`); }
+  };
+  $$("[data-dgopen]").forEach((b) => (b.onclick = () => { S.diagFull = b.dataset.dgopen; render(); $("#diagx")?.focus(); }));
+  const dx = $("#diagx"); if (dx) dx.onclick = () => { S.diagFull = false; render(); };
+  const ls = $("#lsess"); if (ls) ls.onchange = () => { S.sessIdx = Number(ls.value); render(); };
+  const lg = $("#lgroup"); if (lg) lg.onclick = () => { S.groupBy = S.groupBy === "status" ? "" : "status"; render(); };
+}
 // Versioned, abortable detail fetch: rapid clicks never show a stale record.
 async function loadDetail(id) {
   if (!id) return;
@@ -509,10 +463,10 @@ async function loadDetail(id) {
   const ctrl = new AbortController(); S.detailAbort = ctrl;
   S.detailError = ""; render(true);
   try {
-    const r = await api(`/api/control/task/${id}`, {}, { signal: ctrl.signal });
+    const r = await api(`${LOOP}/tasks/${encodeURIComponent(id)}`, {}, { signal: ctrl.signal });
     if (ver !== S.detailVer || S.sel !== id) return; // superseded
     if (!r.task) throw new Error("Task details were not returned by the server.");
-    S.detail = r.task; render(true);
+    S.detail = r; render(true);
   } catch (error) {
     if (ver !== S.detailVer || S.sel !== id) return;
     S.detailError = error.message || "Unable to load task details."; render(true);
@@ -521,13 +475,44 @@ async function loadDetail(id) {
   }
 }
 
-async function loadLoopDetail(id) {
-  try { const r = await api(`/api/control/loop-tasks/${id}`); S.loopDetail = r; render(); } catch { /* keep list */ }
+// Cheap loop-only refresh (list + counts + engine) — used after mutations and SSE events.
+let loopRefreshing = null;
+async function refreshLoop() {
+  if (loopRefreshing) return loopRefreshing;
+  loopRefreshing = (async () => {
+    try {
+      const [t, st, rq] = await Promise.all([api(`${LOOP}/tasks`), api(`${LOOP}/status`), api(`${LOOP}/requests`).catch(() => null)]);
+      if (Array.isArray(t?.tasks)) { S.loopTasks = t.tasks; S.loopCounts = t.counts || {}; }
+      if (st?.engine) { S.loopEngine = st.engine; S.paused = !!st.engine.paused; }
+      if (Array.isArray(rq?.requests)) S.loopRequests = rq.requests;
+      render(true);
+    } catch { /* next tick retries */ } finally { loopRefreshing = null; }
+  })();
+  return loopRefreshing;
 }
 
+// Loop SSE: engine pushes dispatched/completed/failed/... events; reload what changed.
+let loopEs = null;
+let loopDebounce = null;
+function connectLoopStream() {
+  if (typeof EventSource === "undefined" || loopEs || S.auth.required) return;
+  try {
+    loopEs = new EventSource(`${LOOP}/stream`);
+    loopEs.addEventListener("hello", (ev) => { try { const d = JSON.parse(ev.data || "{}"); if (d.counts) S.loopCounts = d.counts; if (d.engine) { S.loopEngine = d.engine; S.paused = !!d.engine.paused; } render(true); } catch {} });
+    loopEs.addEventListener("loop", (ev) => {
+      let d = {}; try { d = JSON.parse(ev.data || "{}"); } catch {}
+      if (d.counts) S.loopCounts = d.counts;
+      clearTimeout(loopDebounce);
+      loopDebounce = setTimeout(() => { refreshLoop(); if (S.sel && (!d.taskId || d.taskId === S.sel)) loadDetail(S.sel); }, 250);
+    });
+    loopEs.onerror = () => { if (S.auth.required) { try { loopEs.close(); } catch {} loopEs = null; } };
+  } catch { loopEs = null; }
+}
+
+// Polling never stops: the loop always runs in auto mode; Pause only gates the server engine.
 function arm() {
   if (S.timer) clearInterval(S.timer);
-  if (S.auto && !S.paused && S.cfg.enabled) S.timer = setInterval(() => tick(), Math.max(2, Number(S.cfg.refreshSec) || 3) * 1000);
+  if (S.cfg.enabled !== false) S.timer = setInterval(() => tick(), Math.max(3, Number(S.cfg.refreshSec) || 5) * 1000);
 }
 
 // SSE live feed: same-origin HttpOnly session auth, no token query.
@@ -599,7 +584,7 @@ async function tick(force) {
       try { await refreshAuthStatus(); } catch { /* offline — keep last state */ }
       if (S.auth.required) { render(); arm(); return; }
     }
-    const [cfg, ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData, taskTypes] = await Promise.all([
+    const [cfg, ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData, loopStatus, dispatchers, loopTypes, loopAgents] = await Promise.all([
       api("/api/dashboard/config").catch(() => S.cfg),
       api("/api/control/overview?days=7").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
       api("/api/control/tasks?limit=30").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
@@ -612,20 +597,24 @@ async function tick(force) {
       api("/api/feed?limit=8").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
       api("/api/control/brain").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
       api("/api/control/automations").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
-      api("/api/control/requests").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
+      api(`${LOOP}/requests`).catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
       api("/api/control/outbox").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
       api("/api/control/retro?days=30").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
-      api("/api/control/loop-tasks?limit=50").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
+      api(`${LOOP}/tasks`).catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
       api("/api/control/config").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
-      api("/api/control/task-types").catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
+      api(`${LOOP}/status`).catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
+      api(`${LOOP}/dispatchers`).catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
+      api(`${LOOP}/task-types`).catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
+      api(`${LOOP}/agents`).catch((e) => (e?.status === 401 || e?.status === 403 ? "denied" : null)),
     ]);
     if (cfg) S.cfg = cfg;
     // Access-denied fan-out: any private read answering 401/403 flips the gate.
     // (The api() client already sets S.auth.required on authRequired bodies.)
     // SSE lifecycle: unauthorized -> close the stream; re-auth -> reconnect.
-    if ([ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData, taskTypes].some((r) => r === "denied")) {
+    if ([ov, tasks, agents, tools, activity, logs, appr, todos, feed, brain, flows, requests, outbox, retro, loopTasks, cfgData, loopStatus, dispatchers, loopTypes, loopAgents].some((r) => r === "denied")) {
       S.auth.required = true;
       closeFeedStream();
+      try { loopEs?.close(); } catch {} loopEs = null;
       render(); arm(); return;
     }
     if (ov) S.ov = ov;
@@ -647,8 +636,7 @@ async function tick(force) {
       || !!retro || !!loopTasks?.tasks || !!cfgData;
     if (anyOk) { S.offline = false; S.lastFetchOk = Date.now(); }
     else if (Date.now() - (S.lastFetchOk || 0) > 30000) { S.offline = true; }
-    const hadTasks = (S.tasks || []).length;
-    const prevBlocked = new Set((S.tasks || []).filter((r) => r.status === "failed" || r.blockedReason).map((r) => r.id));
+    const prevBlocked = new Set((S.loopTasks || []).filter((r) => r.status === "blocked" || r.status === "failed").map((r) => r.id));
     if (Array.isArray(tasks?.tasks)) S.tasks = tasks.tasks;
     if (Array.isArray(agents?.agents)) S.agents = agents.agents;
     if (Array.isArray(tools?.tools)) S.tools = tools.tools;
@@ -663,23 +651,25 @@ async function tick(force) {
     if (!S.sseConnected && isValidFeed(feed)) { S.feed = feed; S.lastFetchOk = Date.now(); }
     if (brain) S.brain = brain;
     if (Array.isArray(flows?.flows)) S.flows = flows.flows;
-    if (Array.isArray(requests?.requests)) S.requests = requests.requests;
+    if (Array.isArray(requests?.requests)) S.loopRequests = requests.requests;
     if (Array.isArray(outbox?.outbox)) S.outbox = outbox.outbox;
     if (retro) S.retro = retro;
-    if (Array.isArray(loopTasks?.tasks)) S.loopTasks = loopTasks.tasks;
-    if (Array.isArray(taskTypes?.taskTypes)) S.taskTypes = taskTypes.taskTypes;
+    if (Array.isArray(loopTasks?.tasks)) { S.loopTasks = loopTasks.tasks; S.loopCounts = loopTasks.counts || S.loopCounts; }
+    if (loopStatus?.engine) { S.loopEngine = loopStatus.engine; S.paused = !!loopStatus.engine.paused; }
+    if (Array.isArray(dispatchers?.dispatchers)) S.dispatchers = dispatchers.dispatchers;
+    if (Array.isArray(loopTypes?.taskTypes)) S.loopTypes = loopTypes.taskTypes;
+    if (Array.isArray(loopAgents?.agents)) S.loopAgents = loopAgents.agents;
     if (cfgData) S.cfgData = cfgData;
-    S.stale = hadTasks > 0 && (!tasks || !Array.isArray(tasks.tasks));
-    // Assertive announcement only for newly blocked items (polite for the rest).
+    // Assertive announcement only for newly blocked loop tasks (polite for the rest).
     try {
-      const nowBlocked = (S.tasks || []).filter((r) => (r.status === "failed" || r.blockedReason) && !prevBlocked.has(r.id));
+      const nowBlocked = (S.loopTasks || []).filter((r) => (r.status === "blocked" || r.status === "failed") && !prevBlocked.has(r.id));
       if (nowBlocked.length && !S.lastBlockedIds.has(nowBlocked[0].id)) {
         S.lastBlockedIds.add(nowBlocked[0].id);
         const al = $("#alerts"); if (al) al.textContent = `Blocked: ${nowBlocked[0].title || nowBlocked[0].id}`;
       }
     } catch {}
     if (S.sel && !S.detail && !S.detailAbort && !S.detailError) loadDetail(S.sel);
-    if (S.loopSel && !S.loopDetail) loadLoopDetail(S.loopSel);
+    connectLoopStream();
     render(true); arm();
   } catch (e) {
     $("#app").innerHTML = `<main class="shell"><div class="status bad" role="alert">Control Room failed to load: ${esc(e.message)}. <button type="button" class="btn sm" onclick="location.reload()">Retry</button></div></main>`;
@@ -691,8 +681,8 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") {
     if (S.cmdOpen) { S.cmdOpen = false; render(); }
     else if (S.showReq) { S.showReq = false; render(); }
-    else if (S.flowEdit) { S.flowEdit = null; render(); }
     else if (S.diagFull) { S.diagFull = false; render(); }
+    else if (S.flowEdit) { S.flowEdit = null; render(); }
     else if (S.sel) { closeTaskDetail(); }
   } else if (S.cmdOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
     e.preventDefault();
@@ -704,6 +694,6 @@ document.addEventListener("keydown", (e) => {
     if (el) el.click();
   }
 });
-// Single boot: one poll tick + one SSE stream. No loops, no duplicate sources.
+// Single boot: one poll tick + feed SSE + loop SSE (opened after auth in tick).
 connectFeedStream();
 tick();

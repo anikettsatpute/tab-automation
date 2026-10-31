@@ -146,9 +146,9 @@ body:has(#task-detail-drawer) { overflow: hidden; }
 .tpl h3 { margin: 0 0 4px; font-size: 13.5px; } .tpl p { margin: 0; }
 /* logs, feed, chat */
 .logbox { max-height: 500px; overflow-y: auto; font-family: var(--mono); font-size: 11.5px; display: flex; flex-direction: column; gap: 3px; }
-.lrow { padding: 5px 9px; border-radius: 7px; background: #23282b; border: 1px solid var(--line-soft); }
-.lrow.error { border-color: rgba(248,113,113,.5); } .lt { color: var(--faint); margin-right: 6px; }
-.ltag { font-weight: 700; margin-right: 6px; } .lrow.error .ltag { color: var(--bad); } .lrow.info .ltag { color: var(--acc); }
+.logline { padding: 5px 9px; border-radius: 7px; background: #23282b; border: 1px solid var(--line-soft); }
+.logline.error { border-color: rgba(248,113,113,.5); } .lt { color: var(--faint); margin-right: 6px; }
+.ltag { font-weight: 700; margin-right: 6px; } .logline.error .ltag { color: var(--bad); } .logline.info .ltag { color: var(--acc); }
 .lsrc { color: var(--warn); margin-right: 6px; }
 .feed { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
 .fmsg { max-width: 94%; padding: 8px 12px; border-radius: 12px; font-size: 12.5px; }

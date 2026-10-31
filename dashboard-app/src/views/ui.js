@@ -7,7 +7,7 @@
 import { esc } from "./state.js";
 import {
   Activity, Archive, ArrowLeft, ArrowRight, BarChart3, Bot, Brain, Check,
-  CheckCircle2, Circle, CircleDashed, Clock, Coins, Command, FileText,
+  CheckCircle2, ChevronRight, Circle, CircleDashed, Clock, Coins, Command, FileText,
   Fingerprint, GitBranch, History, Inbox, KeyRound, Layers, LayoutDashboard,
   List, ListChecks, ListOrdered, Loader, Lock, LogOut, Maximize2, Menu,
   MessageSquare, MessageSquareWarning, MessagesSquare, Moon, OctagonAlert,
@@ -22,7 +22,7 @@ import {
 const NODES = {
   activity: Activity, archive: Archive, "arrow-left": ArrowLeft, "arrow-right": ArrowRight,
   "bar-chart-3": BarChart3, bot: Bot, brain: Brain, check: Check,
-  "check-circle-2": CheckCircle2, circle: Circle, "circle-dashed": CircleDashed,
+  "check-circle-2": CheckCircle2, "chevron-right": ChevronRight, circle: Circle, "circle-dashed": CircleDashed,
   clock: Clock, coins: Coins, command: Command, "file-text": FileText,
   fingerprint: Fingerprint, "git-branch": GitBranch, history: History, inbox: Inbox,
   "key-round": KeyRound, layers: Layers, "layout-dashboard": LayoutDashboard,

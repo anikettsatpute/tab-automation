@@ -1,6 +1,18 @@
 # OrchestratorLoop Control Plane — Concrete Plan
 
-Status: Draft, awaiting approval | Created: 2026-10-31
+Status: Implemented locally (backend + dashboard), tests green, not deployed | Created: 2026-10-31
+
+## Resolved decisions (2026-10-31)
+- Dispatcher: user picks Muse CLI or GitHub Copilot CLI per request (default `muse`; unavailable dispatchers are shown disabled with the reason).
+- Pause/Resume: kept as an optional, server-side control (`POST /api/control/loop/pause|resume`). The loop is otherwise always Auto.
+- Parallelism: one step at a time (single engine slot).
+- Task types: one seeded `generic` type (analyst → coder → tester → summarizer style). The divider may compose others; screenshot types are not copied.
+- Full refactor allowed: the legacy assistant view, the auto toggle and the old task/pipeline UI were removed.
+
+## Implementation map
+- Backend: `src/loop/{store,engine,dispatchers,task-types,workspace}.js`, `src/routes/loop.js`, engine started/stopped in `src/headless-dashboard.js`.
+- Dashboard: `views/loop.js` (board, ring, drawer, 5 detail tabs, mermaid pipeline), `views/md.js` (marked + dompurify, lazy mermaid + panzoom), `css/loop.css`; `board.js` = Tasks / Automation runs tabs; `main.js` wires the SSE `/stream` (debounced) and loop actions.
+- Verification: `npm test` 159/159, `npm run validate` OK, build OK, live GET smoke test on :3002 (status, dispatchers, task-types, agents, requests, /dashboard).
 Reference: `/home/aniketsatpute/Downloads/images/*.jpeg` (15 screenshots)
 Supersedes UI scope of `docs/dashboard-upgrade-plan.md`. Backend hardening from that plan (jobs, envelope, provider gate, SSE, access) is reused, not redone.
 

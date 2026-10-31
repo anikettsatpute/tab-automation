@@ -9,10 +9,11 @@ const uiSrc = readFileSync("dashboard-app/src/views/ui.js", "utf8");
 const shellSrc = readFileSync("dashboard-app/src/views/shell.js", "utf8");
 const boardSrc = readFileSync("dashboard-app/src/views/board.js", "utf8");
 const tasksSrc = readFileSync("dashboard-app/src/views/tasks.js", "utf8");
+const loopSrc = readFileSync("dashboard-app/src/views/loop.js", "utf8");
 
 // axe aria-progressbar-name (serious): every role="progressbar" needs a name.
 test("progressbars carry an accessible name", () => {
-  for (const [name, src] of [["ui.js", uiSrc], ["board.js", boardSrc]]) {
+  for (const [name, src] of [["ui.js", uiSrc], ["board.js", boardSrc], ["loop.js", loopSrc]]) {
     for (const m of src.matchAll(/role="progressbar"[^>]*>/g)) {
       assert.match(m[0], /aria-label=|aria-labelledby=/, `${name}: progressbar without a name: ${m[0].slice(0, 100)}`);
     }
@@ -27,7 +28,7 @@ test("pageHead renders an h1 (one per view)", () => {
 
 // axe aria-allowed-role (minor): <button> must not carry role="listitem".
 test("no button carries role=listitem", () => {
-  for (const [name, src] of [["tasks.js", tasksSrc], ["board.js", boardSrc], ["shell.js", shellSrc]]) {
+  for (const [name, src] of [["tasks.js", tasksSrc], ["board.js", boardSrc], ["shell.js", shellSrc], ["loop.js", loopSrc]]) {
     assert.doesNotMatch(src, /<button[^>]*role="listitem"/, `${name}: button with role=listitem`);
   }
 });
@@ -39,6 +40,7 @@ test("no button carries role=listitem", () => {
 test("card and banner buttons use visible text as the accessible name", () => {
   assert.doesNotMatch(tasksSrc, /class="bcard[^"]*"[^>]*aria-label=/, "tasks.js: bcard must not set aria-label");
   assert.doesNotMatch(boardSrc, /class="bcard[^"]*"[^>]*aria-label=/, "board.js: bcard must not set aria-label");
+  assert.doesNotMatch(loopSrc, /class="(lrow|lbanner)[ "][^>]*aria-label=/, "loop.js: rows/banners must not set aria-label");
   assert.doesNotMatch(shellSrc, /<button[^>]*class="banner[^>]*aria-label=|aria-label=[^>]*class="banner/, "shell.js: banner button must not set aria-label");
 });
 
@@ -71,9 +73,9 @@ test("no runtime CDN references in dashboard sources", () => {
 });
 
 test("task drawer dialog carries an accessible name and modal semantics", () => {
-  const open = tasksSrc.match(/<aside[^>]*id="task-detail-drawer"[^>]*>/)?.[0] || "";
+  const open = loopSrc.match(/<aside[^>]*id="task-detail-drawer"[^>]*>/)?.[0] || "";
   assert.match(open, /role="dialog"/, "drawer exposes dialog semantics");
   assert.match(open, /aria-modal="true"/, "drawer is modal");
   assert.match(open, /aria-label="Task detail"/, "dialog has an accessible name");
-  assert.match(tasksSrc, /tabindex="-1"/, "drawer is a fallback focus target");
+  assert.match(open, /tabindex="-1"/, "drawer is a fallback focus target");
 });

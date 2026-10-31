@@ -274,6 +274,7 @@ export function taskDetail(root, id) {
     steps: listSteps(root, task.id),
     attempts: listAttempts(root, task.id),
     artifacts: listArtifacts(root, task.id),
+    events: listEvents(root, task.id),
     request: task.request_id ? getRequest(root, task.request_id) : null,
   };
 }

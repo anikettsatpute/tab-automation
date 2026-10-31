@@ -1,9 +1,9 @@
 // Shell views: sidebar + topbar + attention banners + access gate.
-import { S, esc, ago, statusBadge, displayTitle, failedLast24h } from "./state.js";
+import { S, esc, displayTitle, failedLast24h } from "./state.js";
 import { icon } from "./ui.js";
 
-const NAV_ITEMS = [
-  ["board", "Board", "layout-dashboard"], ["assistant", "Assistant", "bot"],
+export const NAV_ITEMS = [
+  ["board", "Board", "layout-dashboard"],
   ["brain", "Brain messages", "brain"], ["todos", "TODOs", "list-checks"],
   ["automations", "Automations", "workflow"], ["config", "Configuration", "settings-2"],
   ["requests", "Requests", "inbox"], ["outbox", "Outbox", "send"],
@@ -11,25 +11,25 @@ const NAV_ITEMS = [
 ];
 
 const NAV_COUNT = () => ({
-  board: S.tasks.length, brain: (S.brain?.messages?.length ?? S.brain?.metrics?.incoming ?? 0),
-  todos: S.todos.length, automations: S.flows.length, requests: S.requests.length,
-  outbox: S.outbox.length, activity: S.activity.length,
+  board: S.loopTasks.length, brain: (S.brain?.messages?.length ?? S.brain?.metrics?.incoming ?? 0),
+  todos: S.todos.filter((t) => t.status === "open").length, automations: S.flows.length, requests: S.loopRequests.length,
+  outbox: S.outbox.length,
 });
 
+const STATUS_ROWS = [["running", "Running", "run", "loader"], ["queued", "Queued", "", "clock"], ["blocked", "Blocked", "orange", "octagon-alert"], ["failed", "Failed", "bad", "x-circle"], ["done", "Done", "ok", "check-circle-2"], ["cancelled", "Cancelled", "", "circle-dashed"]];
+
 export function sidebar() {
-  const tasks = S.tasks || [];
   const counts = NAV_COUNT();
-  const n = (fn) => tasks.filter(fn).length;
-  const stats = [["Running", n((r) => r.status === "running"), "run", "loader"], ["Blocked", n((r) => r.status === "failed" || r.blockedReason), "bad", "octagon-alert"], ["Queued", n((r) => r.status === "queued"), "", "clock"], ["Done", n((r) => r.status === "done"), "ok", "check-circle-2"], ["Failed 24h", n((r) => failedLast24h(r)), "bad", "history"]];
+  const c = S.loopCounts || {};
   return `
   <aside class="side" aria-label="Primary navigation">
-    <div class="brand"><div class="logo" aria-hidden="true">${icon("zap")}</div><div><b>Rick Control Room</b><span>tab-automation</span></div></div>
+    <div class="brand"><div class="logo" aria-hidden="true">${icon("repeat")}</div><div><b>OrchestratorLoop</b><span>tab-automation</span></div></div>
     <button class="btn primary block" id="newtask" type="button">${icon("plus")} New task</button>
     <nav aria-label="Views">${NAV_ITEMS.map(([v, l, ic]) => `<button type="button" class="nav ${S.view === v ? "on" : ""}" data-view="${v}" ${S.view === v ? 'aria-current="page"' : ""}><span class="nlab">${icon(ic)} ${esc(l)}</span>${counts[v] ? `<span class="ncount" aria-label="${counts[v]} items">${counts[v]}</span>` : ""}</button>`).join("")}</nav>
     <div class="sstat"><h4 id="status-h">STATUS</h4>
-      <div role="group" aria-labelledby="status-h">${stats.map(([l, c, cls, ic]) => `<button type="button" class="srow2 ${S.statusFilter === l ? "on" : ""}" data-statusf="${esc(l)}" aria-pressed="${S.statusFilter === l}"><i class="dot ${cls}" aria-hidden="true"></i>${icon(ic)} ${esc(l)} <b>${c}</b></button>`).join("")}</div>
+      <div role="group" aria-labelledby="status-h">${STATUS_ROWS.map(([k, l, cls, ic]) => `<button type="button" class="srow2 ${S.statusFilter === k ? "on" : ""}" data-statusf="${k}" aria-pressed="${S.statusFilter === k}"><i class="dot ${cls}" aria-hidden="true"></i>${icon(ic)} ${esc(l)} <b>${c[k] ?? 0}</b></button>`).join("")}</div>
     </div>
-    <div class="spal"><span>Command palette</span><kbd>⌘K</kbd></div>
+    <button type="button" class="spal" id="cmds2"><span>Command palette</span><kbd>⌘K</kbd></button>
   </aside>`;
 }
 
@@ -47,15 +47,15 @@ export function topbar() {
     <label class="sr" for="fq">Filter tasks</label>
     <input id="fq" type="search" placeholder="Filter tasks ( / )" value="${esc(S.q)}" aria-label="Filter tasks" autocomplete="off">
     <button type="button" class="btn sm" id="cmds" aria-haspopup="dialog">${icon("command")} Commands <kbd aria-hidden="true">⌘K</kbd></button>
-    <button type="button" class="btn sm ${S.auto ? "on" : ""}" id="autotoggle" aria-pressed="${S.auto}" title="Toggle automatic refresh">${icon("zap")} Auto</button>
-    <button type="button" class="btn sm ${S.paused ? "" : "on"}" id="resume" aria-pressed="${S.paused}" title="Pause or resume live refresh">${S.paused ? `${icon("play")} Resume` : `${icon("pause")} Pause`}</button>
+    <button type="button" class="btn sm ${S.paused ? "primary" : ""}" id="resume" aria-pressed="${S.paused}" title="Pause or resume the orchestrator loop (running step finishes first)">${S.paused ? `${icon("play")} Resume` : `${icon("pause")} Pause`}</button>
     <button type="button" class="btn sm ghost" id="refresh" aria-label="Refresh now">${icon("refresh-cw")} Refresh</button>
     <button type="button" class="btn sm ghost" id="theme" aria-label="Switch to ${S.theme === "dark" ? "light" : "dark"} theme" aria-pressed="${S.theme === "light"}">${icon("sun-moon")} Theme</button>
     ${S.auth.via ? `<button type="button" class="btn sm ghost" id="logout" title="End this browser session">${icon("log-out")} Log out</button>` : ""}
     <span class="spacer"></span>
     ${offline}
     ${access}
-    <span class="pill ${S.paused ? "paused" : "ok"}" role="status">${S.paused ? `${icon("pause")} Paused` : `<span class="pulse" aria-hidden="true"></span>Live`}</span>
+    ${S.loopEngine?.current ? `<span class="hint" role="status">${icon("loader")} ${S.loopEngine.current.kind === "divide" ? "dividing request" : `running step ${(S.loopEngine.current.pos ?? 0) + 1}`}</span>` : ""}
+    <span class="pill ${S.paused ? "paused" : "ok"}" role="status">${S.paused ? `${icon("pause")} Loop paused` : `<span class="pulse" aria-hidden="true"></span>Live`}</span>
   </header>`;
 }
 

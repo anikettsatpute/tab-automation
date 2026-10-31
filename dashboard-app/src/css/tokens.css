@@ -1,11 +1,11 @@
 /* Design tokens: colors, type, radius. Single source of truth for themes. */
 /* No remote fonts: system stack only so the app loads offline with CDN blocked. */
 :root {
-  --bg: #23282b; --panel: #2b3236; --panel-2: #2f3539; --panel-3: #363e43;
-  --line: #4a5359; --line-soft: #383f44; --txt: #e8ecee; --dim: #b6bec3; --faint: #8f9aa1;
-  --acc: #3aa9de; --acc-2: #7cc7e8; --acc-soft: rgba(58,169,222,.14);
-  --ok: #34d399; --ok-soft: rgba(52,211,153,.12); --bad: #f87171; --bad-soft: rgba(248,113,113,.12);
-  --warn: #fbbf24; --radius: 8px;
+  --bg: #1b1f24; --panel: #22272e; --panel-2: #272d35; --panel-3: #2d333b;
+  --line: #3d444d; --line-soft: #30363d; --txt: #e6edf3; --dim: #adbac7; --faint: #8b949e;
+  --acc: #58a6ff; --acc-2: #79c0ff; --acc-soft: rgba(88,166,255,.14);
+  --ok: #3fb950; --ok-soft: rgba(63,185,80,.12); --bad: #f85149; --bad-soft: rgba(248,81,73,.12);
+  --warn: #d29922; --orange: #f0883e; --violet: #bc8cff; --radius: 8px;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif; --mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 }
 /* light theme (topbar toggle) */
@@ -16,4 +16,4 @@ body[data-theme="light"] .sbox { background: var(--panel); }
 body[data-theme="light"] .btn.primary { color: #fff; }
 body[data-theme="light"] .btn.danger, body[data-theme="light"] .status.bad { color: var(--bad); }
 body[data-theme="light"] .top input, body[data-theme="light"] .chatbox input, body[data-theme="light"] .fld textarea, body[data-theme="light"] .fld select, body[data-theme="light"] .fld input, body[data-theme="light"] .tbar input, body[data-theme="light"] .tbar select, body[data-theme="light"] .sel { background: #fff; }
-body[data-theme="light"] .lrow, body[data-theme="light"] .endgoal, body[data-theme="light"] .out, body[data-theme="light"] .pbar, body[data-theme="light"] .mpbar, body[data-theme="light"] .dscroll, body[data-theme="light"] .transcript, body[data-theme="light"] .schedbox, body[data-theme="light"] .palette { background: #eef1f6; }
+body[data-theme="light"] .logline, body[data-theme="light"] .endgoal, body[data-theme="light"] .out, body[data-theme="light"] .pbar, body[data-theme="light"] .mpbar, body[data-theme="light"] .dscroll, body[data-theme="light"] .transcript, body[data-theme="light"] .schedbox, body[data-theme="light"] .palette { background: #eef1f6; }

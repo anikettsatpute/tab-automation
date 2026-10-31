@@ -1,7 +1,8 @@
 // Secondary views: config, agents, tools, brain, requests, outbox, retro,
 // automations, todos, logs, request modal, command palette.
 // Pure render functions — state + events live in main.js.
-import { S, esc, AGENT_OPTS, streamName, streamPipes } from "./state.js";
+import { S, esc, agentIds } from "./state.js";
+import { lpill } from "./loop.js";
 import { pageHead, statRow, emptyState, section, pill, toolbar, searchBox, selectBox, icon } from "./ui.js";
 export function configView() {
   const c = S.cfgData;
@@ -106,17 +107,14 @@ export function brainView() {
   : `<p class="dim">Runner: Discord poller · channel ${esc(sel.channelId || sel.conversationId || "—")}</p><pre class="out">${esc(String(sel.sessionLog || txt(sel)).slice(0, 2000))}</pre>`}</div>` : ""}</div>`;
 }
 
-const pipeAgents = (r) => {
-  try { const a = JSON.parse(r.pipeline || "[]"); if (Array.isArray(a) && a.length) return a.map(esc).join(" → "); } catch { /* not JSON — fall through */ }
-  return esc(typeof r.pipeline === "string" && r.pipeline ? r.pipeline : (r.task_type || "—"));
-};
-
 export function requestsView() {
+  const reqs = S.loopRequests || [];
   return `
-  ${pageHead("Requests", `${S.requests.length} intake`, `<button type="button" class="btn sm primary" id="newtask2">${icon("plus")} New task</button>`)}
-  <p class="hint">Raw goals awaiting / passed through the task-divider. Newest first.</p>
-  ${S.requests.map((r) => `<div class="appr"><div class="row">${icon("inbox")}<b>${esc(String(r.text || "").slice(0, 90))}</b><span class="spacer"></span>${pill(r.status === "running" ? "running" : "queued")}</div>
-  <p class="hint">mode ${esc(r.mode)} · stream ${esc(streamName(r.repo) || r.repo)} · agents ${pipeAgents(r)} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.run_id ? ` · run <span class="kbd">${esc(r.run_id)}</span>` : ""}</p></div>`).join("") || emptyState("inbox", "No requests yet", "Hit + New task to file your first goal.")}</div>`;
+  ${pageHead("Requests", `${reqs.length} filed`, `<button type="button" class="btn sm primary" id="newtask2">${icon("plus")} New task</button>`)}
+  <p class="hint">Raw goals. The divider breaks each request into tasks; the loop runs them one at a time. Newest first.</p>
+  ${reqs.map((r) => `<div class="appr"><div class="row">${icon("inbox")}<b>${esc(String(r.text || "").slice(0, 90))}</b><span class="spacer"></span>${lpill(r.status)}</div>
+  <p class="hint">${esc(r.mode)} · ${esc(r.dispatcher === "copilot" ? "Copilot CLI" : "Muse CLI")}${r.model ? ` · ${esc(r.model)}` : ""}${r.task_type ? ` · type ${esc(r.task_type)}` : ""} · ${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}${r.error ? ` · <span class="bad">${esc(r.error)}</span>` : ""}</p>
+  ${(r.tasks || []).length ? `<div class="row">${r.tasks.map((t) => `<button type="button" class="btn sm ghost" data-gotask="${esc(t.id)}">#${t.seq} ${esc(String(t.title).slice(0, 40))} · ${esc(t.status)}</button>`).join("")}</div>` : ""}</div>`).join("") || emptyState("inbox", "No requests yet", "Hit + New task to file your first goal.")}</div>`;
 }
 
 export function outboxView() {
@@ -214,7 +212,7 @@ export function flowsView() {
   <div class="row"><h4>STEPS (${(ed.steps || []).length} steps)</h4><span class="spacer"></span><button class="btn sm ghost" id="flowexpand">Expand all</button></div>
   <div class="palette"><span class="hint">Add step:</span>${[["run_agent", "Run agent"], ["create_task", "Create task"], ["file_request", "File request"], ["notify", "Notify"], ["condition", "Condition"], ["run_automation", "Run automation"], ["wait", "Wait"]].map(([t, l]) => `<button class="btn sm ghost" data-fadd="${t}">${l}</button>`).join("")}</div>
   ${(ed.steps || []).map((s, i) => `<div class="stepcard"><div class="row"><span class="kbd">▶ ${i + 1}.</span><b>${esc(s.title || s.id || s.type)}</b><span class="kbd">${esc(s.type)}</span><span class="spacer"></span><button class="btn sm ghost" data-fup="${i}" title="Move up">^</button><button class="btn sm ghost" data-fdown="${i}" title="Move down">∨</button><button class="btn sm danger" data-fdel="${i}" title="Delete">🗑</button></div>
-  <div class="row"><label class="fld"><span>Agent</span><select data-sagent="${i}">${AGENT_OPTS.map((a) => `<option ${s.agent === a ? "selected" : ""}>${a}</option>`).join("")}</select></label>
+  <div class="row"><label class="fld"><span>Agent</span><select data-sagent="${i}">${agentIds().map((a) => `<option ${s.agent === a ? "selected" : ""}>${a}</option>`).join("")}</select></label>
   <label class="fld"><span>Model (empty = config default)</span><input data-smodel="${i}" value="${esc(s.model || "")}" placeholder="gpt-5.6-terra"></label></div>
   <label class="fld"><span>Prompt ${s.type === "run_agent" || s.type === "agent" ? "(empty = agent defaultPrompt)" : ""}</span><textarea data-sprompt="${i}" rows="2" placeholder="What should this step do? Use {{steps.<id>}} refs.">${esc(s.prompt || s.message || s.text || s.template || "")}</textarea></label>
   ${s.type === "condition" ? `<label class="fld"><span>Condition rule</span><input data-srule="${i}" value="${esc(s.rule || s.condition?.right || "")}"></label>` : ""}
@@ -255,23 +253,29 @@ export function logsView() {
   return `
   ${pageHead("Logs", `${(S.logs || []).length} entries`, `<button class="btn sm" id="logref">${icon("refresh-cw")} Refresh</button>`)}
   ${toolbar(selectBox("loglevel", [["", "All levels"], ["info", "Info"], ["error", "Errors"]], S.logLevel || "", "Log level"))}
-  <div class="logbox">${(S.logs || []).map((l) => `<div class="lrow ${esc(l.level)}"><span class="lt">${esc(String(l.created_at || "").slice(5, 19).replace("T", " "))}</span>
+  <div class="logbox">${(S.logs || []).map((l) => `<div class="logline ${esc(l.level)}"><span class="lt">${esc(String(l.created_at || "").slice(5, 19).replace("T", " "))}</span>
   <span class="ltag">${esc(l.level)}</span><span class="lsrc">${esc(l.source || "")}</span><span>${esc(l.message || "")}</span></div>`).join("") || emptyState("scroll-text", "No logs", "Logs stream here as the bot works.")}</div></div>`;
 }
 
-// ---------- request modal (PRD 4.5: Request/Direct, repo, 15 types, pipeline, attach) ----------
+// ---------- request modal: Request/Direct, dispatcher (Muse/Copilot), model, task type, repo, attachments ----------
+
+function reqPipelinePreview() {
+  const tt = (S.loopTypes || []).find((t) => t.id === S.reqTaskType);
+  if (tt) return `<div class="pnodes">${tt.steps.map((s, i) => `${i ? `<span class="pn-arr" aria-hidden="true">→</span>` : ""}<div class="pnode2"><span><span class="pn-role">${esc(s.role)}</span><span class="pn-st">${esc(String(s.goal).slice(0, 40))}</span></span></div>`).join("")}</div>`;
+  return `<p class="hint" style="margin:4px 0 0">${S.reqMode === "direct" ? "Direct: one task, generic code → test steps unless you pick a type." : "The divider picks task boundaries and step roles from the goal."}</p>`;
+}
 
 export function reqModal() {
   if (!S.showReq) return "";
-  return `<div class="modal"><div class="mbox"><div class="dhead"><b>Submit a request</b><span class="spacer"></span><button class="btn ghost sm" id="reqx">✕</button></div>
-  <p class="hint">A raw goal. The task-divider grills it, decomposes it, and enqueues the tasks after you confirm.</p>
-  <div class="row"><button class="btn sm ${S.reqMode === "request" ? "primary" : "ghost"}" id="reqm-req">Request</button><button class="btn sm ${S.reqMode === "direct" ? "primary" : "ghost"}" id="reqm-dir">Direct task</button></div>
-  <label class="fld"><span>What should be built or fixed?</span><textarea id="req-text" rows="4" placeholder="Describe the outcome you want. Be concrete about done-ness."></textarea></label>
-  <div class="row"><label class="fld"><span>Stream (replaces repo)</span><select id="req-stream">${(S.cfgData?.streams?.streams || [{ id: "general", name: "General" }, { id: "finance", name: "Finance" }]).map((s) => `<option value="${esc(s.id)}" ${S.reqStream === s.id ? "selected" : ""}>${esc(s.name || s.id)}</option>`).join("")}</select></label>
-  <label class="fld"><span>Pipeline (user-configured agent → agent)</span><select id="req-pipe"><option value="">— divider picks —</option>${streamPipes(S.reqStream).map((p) => `<option value="${esc(p.id)}" ${S.reqPipeline === p.id ? "selected" : ""}>${esc(p.name || p.id)} (${esc((p.agents || []).join(" → "))})</option>`).join("")}</select></label></div>
-  <label class="fld"><span>Agents (pipeline — each step spawns a Muse session)</span><div class="row">${AGENT_OPTS.map((a) => `<button class="btn sm ${S.reqAgents.includes(a) ? "primary" : "ghost"}" data-reqagent="${a}">${a}</button>`).join("")}</div></label>
-  <p class="hint">Stream <b>${esc(streamName(S.reqStream))}</b> · Pipeline: <b>${S.reqMode === "direct" ? esc(S.reqAgents.join(" → ") || "—") : "Divider picks stream + agents from goal"}</b> · sessions write JSON, loop reconciles to DB.</p>
-  <div class="appr" aria-label="Divider preview"><b>${icon("git-branch")} Pipeline preview</b><p class="hint" style="margin:4px 0 0">${S.reqMode === "direct" ? esc((S.reqAgents || []).join(" → ") || "Select at least one agent.") : "Divider preview: goal → stream + ordered agents (no enqueue until you confirm)."}</p></div>
+  const disps = S.dispatchers?.length ? S.dispatchers : [{ id: "muse", label: "Muse CLI", ok: true }, { id: "copilot", label: "GitHub Copilot CLI", ok: false, error: "status unknown" }];
+  return `<div class="modal"><div class="mbox" role="dialog" aria-modal="true" aria-label="Submit a request"><div class="dhead"><b>Submit a request</b><span class="spacer"></span><button type="button" class="btn ghost sm" id="reqx" aria-label="Close">${icon("x")}</button></div>
+  <div class="seg" role="group" aria-label="Request mode"><button type="button" class="${S.reqMode === "request" ? "on" : ""}" id="reqm-req" aria-pressed="${S.reqMode === "request"}">Request</button><button type="button" class="${S.reqMode === "direct" ? "on" : ""}" id="reqm-dir" aria-pressed="${S.reqMode === "direct"}">Direct task</button></div>
+  <label class="fld"><span>What should be built or fixed?</span><textarea id="req-text" rows="5" placeholder="Describe the outcome you want. Be concrete about done-ness."></textarea></label>
+  <div class="row"><label class="fld" style="flex:2"><span>Repo / working dir (absolute path, optional)</span><input id="req-repo" value="${esc(S.reqRepo)}" placeholder="/home/you/Projects/app"></label>
+  <label class="fld" style="flex:1"><span>Task type</span><select id="req-type"><option value="">Let the divider choose</option>${(S.loopTypes || []).map((t) => `<option value="${esc(t.id)}" ${S.reqTaskType === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label></div>
+  <div class="fld"><span>Dispatcher</span><div class="disps" role="radiogroup" aria-label="Dispatcher">${disps.map((d) => `<button type="button" role="radio" class="dispopt ${S.reqDispatcher === d.id ? "on" : ""}" data-reqdisp="${esc(d.id)}" aria-checked="${S.reqDispatcher === d.id}" ${d.ok ? "" : "disabled"}><b>${esc(d.label)}</b><small>${esc(d.ok ? (d.version || "available") : (d.error || "unavailable"))}</small></button>`).join("")}</div></div>
+  <label class="fld"><span>Model (optional — blank uses each agent's default)</span><input id="req-model" value="${esc(S.reqModel)}" placeholder="${S.reqDispatcher === "copilot" ? "e.g. gpt-5" : "e.g. muse-spark-1.3"}"></label>
+  <div class="appr" aria-label="Pipeline preview"><b>${icon("git-branch")} Pipeline preview</b>${reqPipelinePreview()}</div>
   <div class="appr" aria-label="Attachments (text-only)"><b>${icon("paperclip")} Attachments (text-only).</b>
   <p class="hint" style="margin:4px 0 0">${esc(S.reqAttachNote)}</p>
   <div class="row" style="margin-top:6px"><label class="btn sm ghost" for="req-file">Choose file</label>
@@ -279,20 +283,18 @@ export function reqModal() {
   <span class="hint" id="req-attach-status" role="status">${S.reqAttachBusy ? "Uploading…" : S.reqAttachErr ? esc(S.reqAttachErr) : `${(S.reqAttachments || []).length} file(s) staged`}</span></div>
   <div id="req-attach-list">${(S.reqAttachments || []).map((a) => `<div class="row"><span class="kbd">${esc(a.name)}</span><span class="hint">${a.size} bytes</span><span class="spacer"></span><button type="button" class="btn sm ghost" data-reqdel="${esc(a.id)}" ${S.reqAttachBusy ? "disabled" : ""}>Remove</button></div>`).join("") || `<p class="hint">No files staged. Uploads stay in this browser session until you enqueue.</p>`}</div></div>
   <p class="hint" id="req-msg" role="status">${esc(S.reqMsg || "")}</p>
-  <div class="row"><button class="btn primary" id="req-go" ${(S.reqBusy || S.reqAttachBusy || S.reqAttachErr) ? "disabled" : ""}>${S.reqBusy ? "Divider working…" : S.reqAttachBusy ? "Uploading…" : "Enqueue Task"}</button><span class="hint">Long runs return 202 + job id; the board polls until completion.</span></div></div></div>`;
+  <div class="row"><button type="button" class="btn primary" id="req-go" ${(S.reqBusy || S.reqAttachBusy || S.reqAttachErr) ? "disabled" : ""}>${S.reqBusy ? "Submitting…" : S.reqAttachBusy ? "Uploading…" : "Enqueue Task"}</button><span class="hint">Runs in auto mode — one step at a time.</span></div></div></div>`;
 }
-
-// ---------- render (focus-preserving: skip re-render while typing or modal open) ----------
 
 export function cmdPalette() {
   if (!S.cmdOpen) return "";
   const cmds = [
-    ["board", "Go to Board"], ["assistant", "Go to Assistant"], ["brain", "Go to Brain messages"],
+    ["board", "Go to Board"], ["brain", "Go to Brain messages"],
     ["todos", "Go to TODOs"], ["automations", "Go to Automations"], ["config", "Go to Configuration"],
     ["requests", "Go to Requests"],
     ["outbox", "Go to Outbox"], ["activity", "Go to Activity"], ["retro", "Go to Retro"],
-    ["new", "+ New task"], ["pause", "Pause / Resume"], ["refresh", "Refresh now"],
+    ["new", "+ New task"], ["pause", "Pause / Resume loop"], ["refresh", "Refresh now"],
   ].filter(([v, l]) => !S.q || l.toLowerCase().includes(S.q.toLowerCase()));
-  return `<div class="modal"><div class="mbox"><div class="dhead"><b>Commands</b><span class="spacer"></span><button class="btn ghost sm" id="cmdx">✕</button></div>
-  ${cmds.map(([v, l], i) => `<button class="nav ${i === S.cmdIdx ? "on" : ""}" data-cmd="${v}">${esc(l)}</button>`).join("") || `<p class="hint">No match</p>`}</div></div>`;
+  return `<div class="modal"><div class="mbox"><div class="dhead"><b>Commands</b><span class="spacer"></span><button type="button" class="btn ghost sm" id="cmdx" aria-label="Close">${icon("x")}</button></div>
+  ${cmds.map(([v, l], i) => `<button type="button" class="nav ${i === S.cmdIdx ? "on" : ""}" data-cmd="${v}">${esc(l)}</button>`).join("") || `<p class="hint">No match</p>`}</div></div>`;
 }

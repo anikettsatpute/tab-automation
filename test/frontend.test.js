@@ -98,44 +98,50 @@ const panelsSrc = readFileSync("dashboard-app/src/views/panels.js", "utf8");
 const indexHtml = readFileSync("dashboard-app/index.html", "utf8");
 const tokensCss = readFileSync("dashboard-app/src/css/tokens.css", "utf8");
 
-test("run failures consolidate duplicate token errors and escape technical details", () => {
-  const source = boardSrc.slice(boardSrc.indexOf("export function runFailure"), boardSrc.indexOf("export function detailPane")).replace("export function", "function");
-  const escape = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-  const failure = new Function("esc", `${source}; return runFailure;`)(escape);
-  const reason = "Expected token to be set for this request, but none was present <script>";
-  const html = failure({ status: "blocked", error: reason, blockedReason: reason });
-  assert.match(html, /Muse authentication missing/);
-  assert.match(html, /re-queue this run/);
-  assert.equal((html.match(/role="alert"/g) || []).length, 1);
-  assert.equal((html.match(/Expected token/g) || []).length, 1);
-  assert.ok(!html.includes("<script>"));
-  assert.equal(failure({}), "");
-  assert.match(failure({ error: "Network unavailable" }), /Network unavailable/);
+const loopSrc = readFileSync("dashboard-app/src/views/loop.js", "utf8");
+const escHtml = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+const sliceFn = (src, start, end) => src.slice(src.indexOf(start), end ? src.indexOf(end) : undefined).replace(/export function/g, "function");
+
+test("loop board: selection keeps the list mounted behind the drawer", () => {
+  const source = sliceFn(boardSrc, "export function boardView");
+  const state = { sel: "t1", boardTab: "tasks", loopTasks: [{ id: "t1" }], tasks: [] };
+  const view = new Function("S", "esc", "isAutomationRun", "icon", "automationRunsView", "filteredLoopTasks", "loopBanners", "loopBoard", "loopBoardHead", "loopDrawer", `${source}; return boardView;`)(state, escHtml, () => false, () => "", () => "RUNS", () => state.loopTasks, () => "BANNERS", () => "LIST", () => "HEAD", () => "DRAWER");
+  const html = view();
+  for (const k of ["BANNERS", "HEAD", "LIST", "DRAWER", 'data-btab="tasks"', 'data-btab="runs"', "Board view"]) assert.ok(html.includes(k), k);
+  state.sel = null;
+  assert.ok(!view().includes("DRAWER"), "no drawer without a selection");
+  state.boardTab = "runs";
+  assert.match(view(), /RUNS/);
+  assert.ok(!view().includes("LIST"), "runs tab replaces the loop list");
 });
 
-test("selected runs preserve board tabs and filters behind the drawer", () => {
-  assert.ok(!boardSrc.includes("return tasksView(list, detailPane);"));
-  assert.ok(boardSrc.includes('S.boardTab === "runs" && !S.sel ? automationRunsView() : tasksView(list, detailPane)'));
-  assert.match(readFileSync("dashboard-app/src/css/board.css", "utf8"), /\.tdrawer \.detail \{[^}]*border: 0;[^}]*padding: 0;/);
+test("loop drawer opens before detail arrives and exposes errors", () => {
+  const source = sliceFn(loopSrc, "export function loopDrawer");
+  const state = { sel: "t1", detail: null, detailError: "" };
+  const drawer = new Function("S", "esc", "icon", "loopDetailPane", `${source}; return loopDrawer;`)(state, escHtml, () => "", () => "Loaded panel");
+  const html = drawer();
+  for (const re of [/task-detail-drawer/, /role="dialog"/, /aria-modal="true"/, /aria-label="Task detail"/, /data-drawer-backdrop/, /Loading task details/, /id="dclose"/]) assert.match(html, re);
+  state.detailError = "Unable to load <task>";
+  assert.match(drawer(), /detail-retry/);
+  assert.match(drawer(), /Unable to load &lt;task&gt;/);
+  state.detail = { task: { id: "t1" } };
+  assert.match(drawer(), /Loaded panel/);
 });
 
-test("task panel opens on selection before detail arrives and exposes errors", () => {
-  const tasksSrc = readFileSync("dashboard-app/src/views/tasks.js", "utf8");
-  const source = tasksSrc.slice(tasksSrc.indexOf("export function tasksView"), tasksSrc.indexOf("export function taskListOnly")).replace("export function", "function");
-  const state = { sel: "run-1", detail: null, boardTab: "tasks", kindFilter: "all" };
-  const renderTasks = new Function("S", "isAutomationRun", "needsAttention", "kindLabel", "taskListOnly", "icon", "esc", `${source}; return tasksView;`)(state, () => false, () => true, () => "manual", () => "Task list", () => "", String);
-  assert.match(renderTasks([], () => "Loaded panel"), /task-detail-drawer/);
-  assert.match(renderTasks([], () => "Loaded panel"), /role="dialog"/);
-  assert.match(renderTasks([], () => "Loaded panel"), /aria-modal="true"/);
-  assert.match(renderTasks([], () => "Loaded panel"), /aria-label="Task detail"/);
-  assert.match(renderTasks([], () => "Loaded panel"), /data-drawer-backdrop/);
-  assert.match(renderTasks([], () => "Loaded panel"), /Task list/);
-  assert.match(renderTasks([], () => "Loaded panel"), /Loading task details/);
-  state.detailError = "Unable to load task";
-  assert.match(renderTasks([], () => "Loaded panel"), /detail-retry/);
-  assert.match(renderTasks([], () => "Loaded panel"), /Unable to load task/);
-  state.detail = { id: "run-1" };
-  assert.match(renderTasks([], () => "Loaded panel"), /Loaded panel/);
+test("loop ring + pills: progress is labelled and statuses map to tones", () => {
+  const ring = new Function(`${sliceFn(loopSrc, "export function ring", "const matches")}; return ring;`)();
+  assert.match(ring(2, 5, "running"), /aria-label="2 of 5 steps"/);
+  assert.match(ring(0, 0, "queued"), /0\/0/);
+  assert.match(loopSrc, /blocked: "orange"/);
+  assert.match(loopSrc, /failed: "bad"/);
+});
+
+test("pipeline mermaid strips unsafe label characters", () => {
+  const fn = new Function(`${sliceFn(loopSrc, "export function pipelineMermaid", "export function diagramsList")}; return pipelineMermaid;`)();
+  const out = fn([{ role: 'coder"]-->x<script>', status: "done" }, { role: "tester", status: "running" }]);
+  assert.ok(!/[<>"]script/.test(out) && !out.includes('coder"]'), "no injected quotes/brackets");
+  assert.match(out, /s0 --> s1/);
+  assert.match(out, /class s0 done/);
 });
 
 test("offline: no runtime CDN scripts or font imports", () => {
@@ -154,21 +160,35 @@ test("offline: chart has CSS fallback, icons degrade to text", () => {
 });
 
 test("board tabs: data-btab value matches S.boardTab branch", () => {
-  // board.js renders tabs with data-btab="loop" and branches on S.boardTab === "loop".
-  assert.ok(boardSrc.includes('["loop", "Loop tasks"'), "tab value is loop");
-  assert.ok(boardSrc.includes('S.boardTab === "loop"'), "branch matches tab value");
-  assert.ok(!boardSrc.includes('"loops"'), "no stale loops plural");
+  assert.ok(boardSrc.includes('["tasks", `Tasks'), "tasks tab");
+  assert.ok(boardSrc.includes('["runs", `Automation runs'), "runs tab");
+  assert.ok(boardSrc.includes('S.boardTab === "runs"'), "branch matches tab value");
+  assert.ok(!boardSrc.includes('"loop"'), "legacy loop tab removed");
 });
 
-test("detail sessions: stale-export guard + clamped index", () => {
-  assert.ok(boardSrc.includes("expForCur"), "stale transcript guard");
-  assert.ok(boardSrc.includes("sess.length ? sess[Math.min(S.sessIdx, sess.length - 1)]"), "clamped session index");
+test("detail sessions: clamped index + lazy file fetch per attempt", () => {
+  assert.ok(loopSrc.includes("Math.min(S.sessIdx, atts.length - 1)"), "clamped session index");
+  assert.ok(mainSrc.includes("${LOOP}/tasks/${S.sel}/attempts/${encodeURIComponent(aid)}/${kind}"), "attempt files fetched on demand");
+  assert.ok(mainSrc.includes("S.files[key] = { loading: true }"), "loading state while fetching");
 });
 
-test("requests/requeue/runflow: poll 202 jobs, read snake_case run_id", () => {
-  assert.ok(mainSrc.includes("jobRunId(final, sync)"), "run id via jobRunId helper");
-  assert.ok(mainSrc.includes("postJob(`/api/control/task-types/"), "task launch polls job");
-  assert.ok(mainSrc.includes("postJob(`/api/control/loop-tasks/"), "loop dispatch polls job");
+test("loop actions: requests, requeue, append, pause hit the loop API", () => {
+  assert.ok(mainSrc.includes('const LOOP = "/api/control/loop"'));
+  assert.ok(mainSrc.includes("${LOOP}/requests"), "request intake");
+  assert.ok(mainSrc.includes("dispatcher: S.reqDispatcher"), "dispatcher choice sent");
+  assert.ok(mainSrc.includes("fromStep: pos, guidance"), "requeue from step with guidance");
+  assert.ok(mainSrc.includes("${LOOP}/tasks/${S.sel}/append-task"), "append task");
+  assert.ok(mainSrc.includes('${LOOP}/${want ? "pause" : "resume"}'), "pause/resume is server-side");
+  assert.ok(!mainSrc.includes("autotoggle"), "auto toggle removed — loop always runs in auto mode");
+  assert.ok(mainSrc.includes("jobRunId(final, sync)"), "automation run still polls its job");
+});
+
+test("request modal: dispatcher options disable when unavailable", () => {
+  assert.ok(panelsSrc.includes("data-reqdisp"), "dispatcher options");
+  assert.ok(panelsSrc.includes('${d.ok ? "" : "disabled"}'), "unavailable dispatcher disabled");
+  assert.ok(panelsSrc.includes("Let the divider choose"), "task type optional");
+  assert.ok(panelsSrc.includes('id="req-repo"'), "repo input");
+  assert.ok(!panelsSrc.includes('"assistant", "Go to Assistant"'), "assistant removed from palette");
 });
 
 test("dry-run: honest backend trace shape, no fake success", () => {
@@ -207,12 +227,12 @@ test("modal: focus trap + Escape closes every modal kind", () => {
 });
 
 test("explicit renders update open panels while background renders preserve input", () => {
-  const source = mainSrc.slice(mainSrc.indexOf("function render(background"), mainSrc.indexOf("// Brain drawer"));
+  const source = mainSrc.slice(mainSrc.indexOf("function render(background"), mainSrc.indexOf("\nfunction wireOnly"));
   const state = { showReq: true, _renderedModal: true };
   const updates = [];
   const app = { dataset: { booted: "1" } };
   const documentStub = { body: { dataset: {} }, activeElement: { tagName: "SELECT" }, querySelectorAll: () => [], getElementById: () => null };
-  const renderPanel = new Function("S", "document", "$", "renderRegion", "sidebar", "topbar", "mainHtml", "reqModal", "cmdPalette", "brainDrawerLive", "refreshIcons", "paintRetroChart", "wireOnly", "mountTaskDrawer", `${source}; return render;`)(state, documentStub, (selector) => selector === "#app" ? app : null, (selector) => updates.push(selector), ...Array(10).fill(() => ""));
+  const renderPanel = new Function("S", "document", "$", "renderRegion", "sidebar", "topbar", "mainHtml", "reqModal", "cmdPalette", "diagramFull", "refreshIcons", "paintRetroChart", "wireOnly", "mountTaskDrawer", "paintDiagrams", `${source}; return render;`)(state, documentStub, (selector) => selector === "#app" ? app : null, (selector) => updates.push(selector), ...Array(11).fill(() => ""));
   renderPanel();
   assert.ok(updates.includes("#rg-modals"), "select changes must update an already open modal");
   updates.length = 0;
@@ -224,15 +244,6 @@ test("detail polling does not cancel in-flight fetches and errors expose retry",
   assert.ok(mainSrc.includes("!S.detailAbort && !S.detailError"));
   assert.ok(mainSrc.includes('$("#detail-retry")'));
   assert.ok(mainSrc.includes('S.detailError = error.message'));
-});
-
-test("automation run selection routes to the same detail panel", () => {
-  const source = boardSrc.slice(boardSrc.indexOf("export function boardView"), boardSrc.indexOf("export function loopTasksView")).replace("export function", "function");
-  const state = { sel: "scheduled-1", boardTab: "runs", tasks: [], loopTasks: [] };
-  const renderBoard = new Function("S", "matchesQ", "sortRuns", "applyStatusFilter", "needsAttention", "isAutomationRun", "tasksView", "detailPane", "icon", "attentionBanners", "pageHead", `${source}; return boardView;`)(state, () => true, (rows) => rows, (rows) => rows, () => false, () => true, () => "Selected automation panel", () => "", () => "", () => "", () => "Board heading");
-  assert.match(renderBoard(), /Selected automation panel/);
-  assert.match(renderBoard(), /Board heading/);
-  assert.match(renderBoard(), /Board view/);
 });
 
 test("task drawer traps focus, survives background ticks, and returns focus", () => {
