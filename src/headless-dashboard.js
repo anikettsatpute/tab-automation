@@ -24,6 +24,7 @@ import { registerAutomationRoutes } from "./routes/automations.js";
 import { registerJobRoutes } from "./routes/jobs.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerLoopRoutes } from "./routes/loop.js";
+import { registerMcpRoutes } from "./routes/mcp.js";
 
 const DEFAULT_ROOT = process.cwd();
 
@@ -156,6 +157,7 @@ export function createHeadlessApp(cfg, { root = cfg?.root || DEFAULT_ROOT, log =
   registerJobRoutes(app, ctx);
   registerEventRoutes(app, ctx);
   registerLoopRoutes(app, ctx);
+  registerMcpRoutes(app, ctx);
 
   return { app, root, cfg, log };
 }

@@ -204,6 +204,79 @@ function wireConfig() {
       cfgNotice(`Pipeline ${id} started — watch it on the Board.`); tick(true);
     } catch (e) { cfgNotice(`Run failed: ${e.message}`, true); }
   }));
+  // MCP servers — secrets are write-only; grants live in agents.json `mcp`
+  if (S.cfgTab === "mcp" && !S.mcp && !S.mcpLoading) {
+    S.mcpLoading = true;
+    api("/api/control/mcp").then((r) => { S.mcp = r; }).catch((e) => cfgNotice(`MCP load failed: ${e.message}`, true)).finally(() => { S.mcpLoading = false; render(); });
+  }
+  const MCP = "/api/control/mcp";
+  const mcpCall = async (url, body, okMsg, timeoutMs = 15000) => {
+    try {
+      const r = await api(url, { method: "POST", body: JSON.stringify(body || {}) }, { timeoutMs });
+      if (r.servers) S.mcp = { ...S.mcp, ...r };
+      if (okMsg) cfgNotice(typeof okMsg === "function" ? okMsg(r) : okMsg);
+      return r;
+    } catch (e) { cfgNotice(`MCP: ${e.message}`, true); return null; }
+  };
+  const lines = (sel) => ($(sel)?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+  const kv = (sel) => Object.fromEntries(lines(sel).map((l) => { const i = l.indexOf("="); return i > 0 ? [l.slice(0, i).trim(), l.slice(i + 1).trim()] : null; }).filter(Boolean));
+  const mn = $("#mcp-new"); if (mn) mn.onclick = () => { S.mcpEdit = { _new: true, id: "", transport: "stdio", command: "npx", args: [], secrets: [], env: {}, headers: {} }; render(); };
+  $$("[data-mcpedit]").forEach((b) => (b.onclick = () => { const s = S.mcp?.servers.find((x) => x.id === b.dataset.mcpedit); if (s) { S.mcpEdit = JSON.parse(JSON.stringify(s)); render(); } }));
+  const mt = $("#mcp-transport"); if (mt) mt.onchange = () => { S.mcpEdit.transport = mt.value; render(); };
+  const mc = $("#mcp-cancel"); if (mc) mc.onclick = () => { S.mcpEdit = null; render(); };
+  const ms = $("#mcp-save"); if (ms) ms.onclick = async () => {
+    const ed = S.mcpEdit;
+    const http = ed.transport === "http";
+    const body = {
+      _new: !!ed._new, id: $("#mcp-id").value.trim(), name: $("#mcp-name").value.trim(), note: $("#mcp-note").value.trim(), transport: ed.transport,
+      url: http ? $("#mcp-url").value.trim() : undefined,
+      command: http ? undefined : $("#mcp-command").value.trim(), args: http ? undefined : lines("#mcp-args"),
+      env: http ? {} : kv("#mcp-env"), headers: http ? kv("#mcp-headers") : {},
+      secrets: lines("#mcp-secrets").map((l) => { const [slot, ...rest] = l.split(":"); return { slot: slot.trim().toUpperCase(), label: rest.join(":").trim() }; }),
+      enabled: ed.enabled !== false,
+    };
+    const r = await mcpCall(MCP, body, `Saved MCP server ${body.id}.`);
+    if (r) { S.mcpEdit = null; render(); }
+  };
+  $$("[data-mcpdel]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.mcpdel;
+    if (!confirm(`Delete MCP server ${id}? Its MCP_<num>_* secrets are removed from .env and all agent access is revoked.`)) return;
+    try { const r = await api(`${MCP}/${encodeURIComponent(id)}`, { method: "DELETE" }); S.mcp = { ...S.mcp, ...r }; cfgNotice(`Deleted ${id}.`); }
+    catch (e) { cfgNotice(`MCP: ${e.message}`, true); }
+  }));
+  $$("[data-mcpsave]").forEach((b) => (b.onclick = () => {
+    const id = b.dataset.mcpsave; const set = {};
+    $$(`[data-mcpsec="${id}"]`).forEach((el) => { if (el.value.trim()) set[el.dataset.slot] = el.value.trim(); el.value = ""; });
+    if (!Object.keys(set).length) { cfgNotice("Nothing to save — type a value first.", true); return; }
+    mcpCall(`${MCP}/${encodeURIComponent(id)}/secrets`, { set }, `Saved ${Object.keys(set).join(", ")} for ${id}.`);
+  }));
+  $$("[data-mcpclr]").forEach((b) => (b.onclick = () => {
+    if (!confirm(`Clear ${b.dataset.slot} for ${b.dataset.mcpclr}?`)) return;
+    mcpCall(`${MCP}/${encodeURIComponent(b.dataset.mcpclr)}/secrets`, { clear: [b.dataset.slot] }, `Cleared ${b.dataset.slot}.`);
+  }));
+  $$("[data-mcptest]").forEach((b) => (b.onclick = async () => {
+    b.disabled = true; cfgNotice(`Testing ${b.dataset.mcptest}… (first npx run can take a while)`);
+    await mcpCall(`${MCP}/${encodeURIComponent(b.dataset.mcptest)}/test`, {}, (r) => r.test?.ok ? `${b.dataset.mcptest}: ${r.test.tools.length} tools.` : `${b.dataset.mcptest}: ${r.test?.hint || "failed"}${r.test?.oauth ? " — use Sign in." : ""}`, 90000);
+    render();
+  }));
+  $$("[data-mcpgrantsave]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.mcpgrantsave;
+    const agents = $$(`[data-mcpgrant="${id}"]`).filter((el) => el.checked).map((el) => el.value);
+    const r = await mcpCall(`${MCP}/${encodeURIComponent(id)}/agents`, { agents }, `${id}: access ${agents.length ? `granted to ${agents.join(", ")}` : "revoked from all agents"}.`);
+    if (r) { S.cfgData = await api("/api/control/config").catch(() => S.cfgData); render(); }
+  }));
+  $$("[data-mcpauth]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.mcpauth;
+    const clientId = $(`#mcp-cid-${id}`)?.value.trim(); const clientSecret = $(`#mcp-csec-${id}`)?.value.trim();
+    const win = window.open("about:blank", "_blank");
+    try {
+      const r = await api(`${MCP}/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify(clientId ? { clientId, clientSecret } : {}) });
+      if (win) { win.opener = null; win.location.href = r.authorizeUrl; } else window.open(r.authorizeUrl, "_blank", "noopener");
+      cfgNotice(`Finish sign-in in the new tab, then press Test on ${id}.`);
+      S.mcp = null; render();
+    } catch (e) { try { win?.close(); } catch {} cfgNotice(`Sign-in: ${e.message}`, true); }
+  }));
+  $$("[data-mcprefresh]").forEach((b) => (b.onclick = () => mcpCall(`${MCP}/${encodeURIComponent(b.dataset.mcprefresh)}/oauth/refresh`, {}, "Token refreshed.")));
   // secrets (.env) — values are write-only; inputs are cleared after save
   if (S.cfgTab === "secrets" && !S.cfgEnv && !S.cfgEnvLoading) {
     S.cfgEnvLoading = true;

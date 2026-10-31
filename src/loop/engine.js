@@ -123,7 +123,7 @@ export async function divideRequest(cfg, requestId, { log = () => {} } = {}) {
       key: current.key, role: "assistant", model: req.model || "", cwd: req.repo || root,
       promptFile, promptText: readText(promptFile), taskDir: dir, transcriptPath: path.join(dir, "divider.transcript.jsonl"),
       outputSchema: req.dispatcher === "muse" && process.env.LOOP_OUTPUT_SCHEMA === "1" ? path.join(SCHEMA_DIR, "divider.schema.json") : null,
-      timeoutMs: 300000, maxModelSteps: 20,
+      timeoutMs: 300000, maxModelSteps: 20, mcp: false,
     });
     const got = readResult(resultPath, r.stdout);
     const norm = normalizeDivider(got?.raw, roles);

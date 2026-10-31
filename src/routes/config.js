@@ -58,6 +58,7 @@ export function validateAgents(doc, providerIds) {
     if (!String(a.systemPrompt || "").trim()) return `agent ${a.id}: systemPrompt required`;
     if (a.provider && !providerIds.has(a.provider)) return `agent ${a.id}: unknown provider ${a.provider}`;
     if (a.temperature != null && a.temperature !== "" && !(Number(a.temperature) >= 0 && Number(a.temperature) <= 2)) return `agent ${a.id}: temperature must be 0–2`;
+    if (a.mcp != null && (!Array.isArray(a.mcp) || a.mcp.some((m) => !ID_RE.test(String(m))))) return `agent ${a.id}: mcp must be a list of MCP server ids`;
   }
   return null;
 }

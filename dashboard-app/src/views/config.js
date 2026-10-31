@@ -11,8 +11,10 @@ export const CFG_TABS = [
   ["discord", "Discord", "message-circle"],
   ["agents", "Agents", "bot"],
   ["pipelines", "Pipelines", "git-branch"],
+  ["mcp", "MCP servers", "wrench"],
   ["secrets", "Secrets (.env)", "key-round"],
 ];
+const MCP_STATUS = { ready: "ok", disabled: "", "needs-secret": "warn", "needs-auth": "warn", error: "bad" };
 const BUILTIN_CMDS = ["!remember <text>", "!recall <q>", "!todo <text>", "!todos", "!history", "!automations", "!pipelines", "!pipeline <id> <goal>"];
 
 /** Models offered for a provider: explicit list, else known muse models, else its default. */
@@ -87,6 +89,7 @@ function agentsTab(c) {
     return `<div class="stepcard">
     <div class="row"><button type="button" class="btn sm ghost" data-aopen="${esc(a.id)}" aria-expanded="${!!open}">${icon(open ? "chevron-down" : "chevron-right")}</button>
       <b>${icon("bot")} ${esc(a.id || "new agent")}</b><span class="hint">${esc(a.description || "")}</span><span class="spacer"></span>
+      ${(a.mcp || []).map((m) => `<span class="tag" title="MCP server (manage in the MCP servers tab)">${icon("wrench")} ${esc(m)}</span>`).join("")}
       <span class="kbd">${esc(a.provider || defProv || "default")}${a.model ? ` · ${esc(a.model)}` : ""}</span>
       <button type="button" class="btn sm ghost" data-cfgtest="${esc(a.id)}" ${a._new ? "disabled" : ""}>${icon("play")} Test</button>
       <button type="button" class="btn sm danger" data-adel="${i}" aria-label="Delete agent ${esc(a.id)}">${icon("trash-2")}</button></div>
@@ -133,6 +136,62 @@ function pipelinesTab() {
   </div>`).join("") || emptyState("git-branch", "No pipelines", "Create one above.")}`);
 }
 
+const kvText = (o) => Object.entries(o || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+
+function mcpForm(ed, nextNum) {
+  const num = ed.num || nextNum;
+  const http = ed.transport === "http";
+  return `<div class="appr" role="group" aria-label="MCP server editor">
+    <div class="row">${fld("ID", `<input id="mcp-id" value="${esc(ed.id || "")}" ${ed._new ? "" : "readonly"} placeholder="github">`)}
+      ${fld("Name", `<input id="mcp-name" value="${esc(ed.name || "")}" placeholder="GitHub">`, "grow")}
+      ${fld("Transport", `<select id="mcp-transport">${opt("stdio", ed.transport || "stdio", "stdio (local command)")}${opt("http", ed.transport, "http (remote URL)")}</select>`)}
+      <span class="kbd" title="Secrets for this server are stored in .env as MCP_${num}_&lt;SLOT&gt;">#${num}</span></div>
+    ${http
+      ? fld("URL (https; http only for localhost)", `<input id="mcp-url" value="${esc(ed.url || "")}" placeholder="https://api.example.com/mcp">`)
+      : `<div class="row">${fld("Command", `<input id="mcp-command" value="${esc(ed.command || "")}" placeholder="npx">`)}${fld("Args (one per line)", `<textarea id="mcp-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-github">${esc((ed.args || []).join("\n"))}</textarea>`, "grow")}</div>`}
+    ${fld("Secret slots (one per line: SLOT or SLOT: label) — stored as MCP_" + num + "_<SLOT>", `<textarea id="mcp-secrets" rows="2" placeholder="TOKEN: GitHub PAT">${esc((ed.secrets || []).map((s) => (s.label ? `${s.slot}: ${s.label}` : s.slot)).join("\n"))}</textarea>`)}
+    ${http ? "" : fld("Env passed to the server (KEY=VALUE per line; use ${SLOT} for a secret)", `<textarea id="mcp-env" rows="2" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=\${TOKEN}">${esc(kvText(ed.env))}</textarea>`)}
+    ${http ? fld("Headers (KEY=VALUE per line; whole value must be ${SLOT})", `<textarea id="mcp-headers" rows="2" placeholder="X-Api-Key=\${API_KEY}">${esc(kvText(ed.headers))}</textarea>`) : ""}
+    ${fld("Note", `<input id="mcp-note" value="${esc(ed.note || "")}">`)}
+    <div class="row"><span class="spacer"></span><button type="button" class="btn sm ghost" id="mcp-cancel">Cancel</button>
+      <button type="button" class="btn sm primary" id="mcp-save">${icon("save")} Save server</button></div>
+  </div>`;
+}
+
+function mcpTab() {
+  const m = S.mcp;
+  if (!m) return section("MCP servers", `<p class="hint" aria-busy="true">Loading…</p>`);
+  const agents = m.agents || [];
+  return section(`MCP servers (${m.servers.length})`, `
+  <p class="hint">${icon("shield-check")} Each server gets a number; its secrets live in <span class="kbd">.env</span> as <span class="kbd">MCP_&lt;num&gt;_&lt;SLOT&gt;</span> and are write-only here. Agents get <b>no</b> MCP servers unless ticked below; only <b>ready</b> servers are attached to a run.</p>
+  <div class="row"><button type="button" class="btn sm" id="mcp-new">${icon("plus")} Add MCP server</button></div>
+  ${S.mcpEdit ? mcpForm(S.mcpEdit, m.nextNum) : ""}
+  ${m.servers.map((s) => `<div class="stepcard">
+    <div class="row"><span class="kbd">#${s.num}</span><b>${icon("wrench")} ${esc(s.name || s.id)}</b><span class="hint">${esc(s.id)} · ${esc(s.transport)}</span>
+      <span class="tag ${MCP_STATUS[s.status] || ""}">${esc(s.status)}</span>${s.tools?.length ? `<span class="hint">${s.tools.length} tools</span>` : ""}
+      <span class="spacer"></span>
+      <button type="button" class="btn sm ghost" data-mcptest="${esc(s.id)}">${icon("play")} Test</button>
+      <button type="button" class="btn sm ghost" data-mcpedit="${esc(s.id)}">${icon("pencil")} Edit</button>
+      <button type="button" class="btn sm danger" data-mcpdel="${esc(s.id)}" aria-label="Delete MCP server ${esc(s.id)}">${icon("trash-2")}</button></div>
+    <p class="hint">${esc(s.transport === "http" ? s.url : [s.command, ...(s.args || [])].join(" "))}${s.note ? ` — ${esc(s.note)}` : ""}</p>
+    ${s.missing?.length ? `<p class="hint">${icon("alert-triangle")} Missing: ${s.missing.map((k) => `<span class="kbd">${esc(k)}</span>`).join(" ")}</p>` : ""}
+    ${s.authHint ? `<p class="hint">${icon("info")} ${esc(s.authHint)}</p>` : ""}
+    ${s.secrets.map((k) => `<div class="row">${fld(`${k.slot}${k.label ? ` — ${k.label}` : ""} (${k.key})`, `<input data-mcpsec="${esc(s.id)}" data-slot="${esc(k.slot)}" type="password" autocomplete="off" spellcheck="false" placeholder="${k.set ? "•••••• (set — type to replace)" : "not set"}">`, "grow")}
+      <span class="tag ${k.set ? "ok" : "bad"}">${k.set ? "set" : "unset"}</span>
+      <button type="button" class="btn sm ghost" data-mcpclr="${esc(s.id)}" data-slot="${esc(k.slot)}" ${k.set ? "" : "disabled"} aria-label="Clear ${esc(k.key)}">${icon("x")} Clear</button></div>`).join("")}
+    ${s.secrets.length ? `<div class="row"><span class="spacer"></span><button type="button" class="btn sm primary" data-mcpsave="${esc(s.id)}">${icon("save")} Save secrets</button></div>` : ""}
+    ${s.transport === "http" ? `<div class="row">${s.oauth ? `<span class="tag ${s.oauth.signedIn ? "ok" : "warn"}">${s.oauth.signedIn ? "signed in" : "not signed in"}</span>${s.oauth.expiresAt ? `<span class="hint">expires ${esc(new Date(s.oauth.expiresAt).toLocaleString())}</span>` : ""}` : ""}
+      ${fld("OAuth client ID (only if the provider has no dynamic registration)", `<input id="mcp-cid-${esc(s.id)}" autocomplete="off">`, "grow")}
+      ${fld("Client secret", `<input id="mcp-csec-${esc(s.id)}" type="password" autocomplete="off">`)}
+      <button type="button" class="btn sm" data-mcpauth="${esc(s.id)}">${icon("key-round")} Sign in</button>
+      ${s.oauth?.canRefresh ? `<button type="button" class="btn sm ghost" data-mcprefresh="${esc(s.id)}">${icon("refresh-cw")} Refresh token</button>` : ""}</div>` : ""}
+    <div class="row" role="group" aria-label="Agents allowed to use ${esc(s.id)}"><span class="hint">${icon("bot")} Agents:</span>
+      ${agents.map((a) => `<label class="chk"><input type="checkbox" data-mcpgrant="${esc(s.id)}" value="${esc(a.id)}" ${s.agents.includes(a.id) ? "checked" : ""}> ${esc(a.id)}</label>`).join(" ") || `<span class="hint">no agents</span>`}
+      <span class="spacer"></span><button type="button" class="btn sm" data-mcpgrantsave="${esc(s.id)}">${icon("save")} Save access</button></div>
+    ${s.tools?.length ? `<details><summary class="hint">Tools</summary><p class="hint">${s.tools.map((t) => `<span class="kbd">${esc(t)}</span>`).join(" ")}</p></details>` : ""}
+  </div>`).join("") || emptyState("wrench", "No MCP servers", "Add one above.")}`);
+}
+
 function secretsTab() {
   const keys = S.cfgEnv;
   if (!keys) return section("Secrets (.env)", `<p class="hint" aria-busy="true">Loading…</p>`);
@@ -154,9 +213,9 @@ export function configView() {
   const c = S.cfgData;
   if (!c) return `<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;
   const tab = CFG_TABS.some(([v]) => v === S.cfgTab) ? S.cfgTab : "providers";
-  const body = tab === "discord" ? discordTab(c) : tab === "agents" ? agentsTab(c) : tab === "pipelines" ? pipelinesTab() : tab === "secrets" ? secretsTab() : providersTab(c);
+  const body = tab === "discord" ? discordTab(c) : tab === "agents" ? agentsTab(c) : tab === "pipelines" ? pipelinesTab() : tab === "mcp" ? mcpTab() : tab === "secrets" ? secretsTab() : providersTab(c);
   return `
-  ${pageHead("Configuration", "providers · discord · agents · pipelines · secrets", S.cfgDirty ? `<span class="tag warn">unsaved changes</span><button type="button" class="btn sm primary" id="cfgsave">${icon("save")} Save</button>` : "")}
+  ${pageHead("Configuration", "providers · discord · agents · pipelines · mcp · secrets", S.cfgDirty ? `<span class="tag warn">unsaved changes</span><button type="button" class="btn sm primary" id="cfgsave">${icon("save")} Save</button>` : "")}
   ${S.cfgMsg ? `<div class="notice ${S.cfgErr ? "bad" : "ok"}" role="status">${icon(S.cfgErr ? "alert-triangle" : "check-circle-2")} ${esc(S.cfgMsg)}</div>` : ""}
   ${tabBar()}
   ${body}`;

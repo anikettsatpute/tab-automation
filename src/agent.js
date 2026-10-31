@@ -199,8 +199,11 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
     "--session-id", cliSession,
     "--prompt-file", promptTmp,
   ];
-  const env = { ...process.env };
-  if (!env.MUSE_KEY && cfg.museKey) env.MUSE_KEY = cfg.museKey;
+  const { buildChildEnv } = await import("./services/runner.js");
+  const { mcpForAgent } = await import("./services/mcp.js");
+  const mcp = await mcpForAgent(cfg, agent);
+  args.push(...mcp.muse);
+  const env = { ...buildChildEnv(cfg), ...mcp.env };
   const museApiKey = resolveMuseApiKey(cfg, base).key;
   if (museApiKey) args.push("--api-key-stdin");
   const museStdin = museApiKey ? "pipe" : "ignore";

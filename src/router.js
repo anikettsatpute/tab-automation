@@ -91,7 +91,7 @@ export async function routeIntent(cfg, { id, prompt, timeoutMs = 120000 }) {
     writeFileSync(promptFile, prompt);
     const r = await getDispatcher(dispatcher).dispatch(cfg, {
       key: `router:${id}`, role: "assistant", model: "", cwd: dir, promptFile, promptText: prompt,
-      taskDir: dir, transcriptPath: path.join(dir, "transcript.jsonl"), timeoutMs, maxModelSteps: 4,
+      taskDir: dir, transcriptPath: path.join(dir, "transcript.jsonl"), timeoutMs, maxModelSteps: 4, mcp: false,
     });
     const text = finalAssistantText(r.stdout) || r.stdout;
     const decision = parseDecision(text);

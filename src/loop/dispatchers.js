@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { buildChildEnv } from "../services/runner.js";
 import { resolveMuseApiKey } from "../providers.js";
 import { parseTranscript } from "./transcript.js";
+import { mcpForAgent, writeCopilotConfig, noteMcpFailure } from "../services/mcp.js";
 
 const active = new Map(); // key -> ChildProcess
 const MAX_STDOUT = 2 * 1024 * 1024;
@@ -59,7 +60,7 @@ export const muse = {
     const r = spawnSync(museBin(), ["--version"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
     return r.status === 0 ? { ok: true, version: String(r.stdout).trim() } : { ok: false, error: r.error?.message || String(r.stderr || "").trim() || "muse not found" };
   },
-  async dispatch(cfg, { key, role, model, cwd, promptFile, transcriptPath, timeoutMs = 900000, maxModelSteps = 60, outputSchema = null }) {
+  async dispatch(cfg, { key, role, model, cwd, promptFile, transcriptPath, timeoutMs = 900000, maxModelSteps = 60, outputSchema = null, mcp: useMcp = true }) {
     const sessionId = randomUUID();
     const args = [
       "exec", "--provider", "meta", "--model", model || "muse-spark-1.3", "--contributor-mode", "on",
@@ -70,10 +71,13 @@ export const muse = {
     if (outputSchema) args.push("--output-schema", outputSchema);
     // Opt-in: bwrap cannot create namespaces in some hosts (e.g. flatpak), which blocks every shell call.
     if (process.env.LOOP_MUSE_SANDBOX === "off") args.push("--disable-sandbox");
+    const mcp = useMcp ? await mcpForAgent(cfg, role) : { muse: [], env: {}, used: [], skipped: [] };
+    args.push(...mcp.muse);
     const apiKey = resolveMuseApiKey(cfg, role).key;
     if (apiKey) args.push("--api-key-stdin");
-    const r = await run(museBin(), args, { key, cwd, env: buildChildEnv(cfg), stdin: apiKey || null, timeoutMs, transcriptPath });
-    return { ...r, sessionId };
+    const r = await run(museBin(), args, { key, cwd, env: { ...buildChildEnv(cfg), ...mcp.env }, stdin: apiKey || null, timeoutMs, transcriptPath });
+    if (r.exitCode && mcp.used.length) noteMcpFailure(cfg.root, r.stderr);
+    return { ...r, sessionId, mcp: { used: mcp.used, skipped: mcp.skipped } };
   },
 };
 
@@ -91,15 +95,20 @@ export const copilot = {
     if (r.status === 0 && !/Cannot find GitHub Copilot CLI|Install GitHub Copilot CLI/i.test(out)) return { ok: true, version: String(r.stdout).trim().split("\n")[0] };
     return { ok: false, error: r.error?.message || "GitHub Copilot CLI not installed (npm i -g @github/copilot, then `copilot` once to log in)" };
   },
-  async dispatch(cfg, { key, model, cwd, promptText, taskDir, transcriptPath, timeoutMs = 900000 }) {
+  async dispatch(cfg, { key, role, model, cwd, promptText, taskDir, transcriptPath, timeoutMs = 900000, mcp: useMcp = true }) {
     // Headless: prompt via -p; tools auto-approved because nobody can answer prompts in Auto mode.
     // JSONL events: the dashboard renders them as a chat transcript (tools, outputs, replies).
     const args = ["-p", promptText, "--allow-all-tools", "--add-dir", taskDir, "--output-format", "json"];
     if (model) args.push("--model", model);
     const extra = String(process.env.COPILOT_EXTRA_ARGS || "").trim();
     if (extra) args.push(...extra.split(/\s+/));
-    const r = await run(copilotBin(), args, { key, cwd, env: buildChildEnv(cfg), timeoutMs, transcriptPath });
-    return { ...r, sessionId: parseTranscript(r.stdout).meta?.sessionId || "" };
+    const mcp = useMcp ? await mcpForAgent(cfg, role) : { copilot: null, used: [], skipped: [] };
+    const conf = mcp.copilot ? writeCopilotConfig(mcp.copilot) : null;
+    if (conf) args.push("--additional-mcp-config", `@${conf.file}`);
+    try {
+      const r = await run(copilotBin(), args, { key, cwd, env: buildChildEnv(cfg), timeoutMs, transcriptPath });
+      return { ...r, sessionId: parseTranscript(r.stdout).meta?.sessionId || "", mcp: { used: mcp.used, skipped: mcp.skipped } };
+    } finally { conf?.cleanup(); }
   },
 };
 

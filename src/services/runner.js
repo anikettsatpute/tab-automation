@@ -43,6 +43,8 @@ export function buildChildEnv(cfg) {
   for (const k of Object.keys(env)) {
     if (k === "MUSE_KEY" || k.startsWith("MUSE_")) continue;
     if (k.startsWith("DISCORD_") || k.startsWith("AZURE_") || k.startsWith("CONTROL_")) delete env[k];
+    // MCP secrets are re-added per run, only for servers the agent is granted.
+    if (k.startsWith("MCP_")) delete env[k];
   }
   if (!env.MUSE_KEY && cfg?.museKey) env.MUSE_KEY = cfg.museKey;
   return env;
@@ -176,7 +178,10 @@ export async function runAgentStep(cfg, {
     "--session-id", cliSession,
     "--prompt-file", promptTmp,
   ];
-  const env = buildChildEnv(cfg);
+  const { mcpForAgent } = await import("./mcp.js");
+  const mcp = await mcpForAgent(cfg, agent);
+  args.push(...mcp.muse);
+  const env = { ...buildChildEnv(cfg), ...mcp.env };
   const museApiKey = resolveMuseApiKey(cfg, agent).key;
   if (museApiKey) args.push("--api-key-stdin");
   const museStdin = museApiKey ? "pipe" : "ignore";
