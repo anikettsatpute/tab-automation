@@ -132,16 +132,23 @@ function routerCatalogs(cfg) {
   } catch {}
   let pipelines = [];
   try { pipelines = loadTaskTypes(cfg.root); } catch {}
-  return { automations: [...autos.values()], pipelines };
+  // Repo files the router may inspect (read-only) to ground its decision.
+  const files = [
+    { path: "config/agents.json", summary: "agent roster + MCP grants" },
+    { path: "config/task-types.json", summary: "pipeline definitions (same as pipelines list)" },
+    { path: "config/tools.json", summary: "MCP servers" },
+    { path: "config/workflows.json", summary: "file-based automations" },
+  ];
+  return { automations: [...autos.values()], pipelines, files };
 }
 
 const fmtTodos = (rows) => rows.length ? rows.map((t) => `• \`${t.id}\` ${t.text}${t.due ? ` — due ${t.due}` : ""}${t.priority ? ` (${t.priority})` : ""}`).join("\n") : "No open todos.";
 
 /** AI-routed handling. Returns a planner result, or null to fall back to keyword routing. */
 async function aiRoute(cfg, deps, msg, text, channelHistory) {
-  const { automations, pipelines } = routerCatalogs(cfg);
+  const { automations, pipelines, files } = routerCatalogs(cfg);
   const todos = listTodos(cfg.root, { limit: 30 });
-  const prompt = buildRouterPrompt({ text, user: msg.author?.tag, history: channelHistory, automations, pipelines, todos });
+  const prompt = buildRouterPrompt({ text, user: msg.author?.tag, history: channelHistory, automations, pipelines, todos, files });
   await msg.channel?.sendTyping?.().catch(() => {});
   const { decision: d, session } = await deps.routeIntent(cfg, { id: msg.id || `adhoc-${Date.now().toString(36)}`, prompt });
   if (!d) {

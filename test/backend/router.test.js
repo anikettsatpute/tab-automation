@@ -42,6 +42,14 @@ test("buildRouterPrompt includes catalogs, todos and the message", async () => {
   for (const s of ["ship-it", "generic", "buy milk", "do the thing", "clarify"]) assert.ok(p.includes(s), s);
 });
 
+test("buildRouterPrompt tells the router it has read-only tools + repo files", async () => {
+  const { buildRouterPrompt } = await import("../../src/router.js");
+  const p = buildRouterPrompt({ text: "x", user: "u", files: [{ path: "config/tools.json", summary: "MCP servers" }] });
+  assert.ok(p.includes("READ-ONLY tools"), "router knows it can inspect");
+  assert.ok(p.includes("config/tools.json"), "repo files listed");
+  assert.ok(!/Do NOT call tools/.test(p), "old no-tools ban is gone");
+});
+
 test("router list_todos replies with open todos", async () => {
   const { handleRickMessage } = await import("../../src/planner.js");
   const { addTodo } = await import("../../src/db.js");

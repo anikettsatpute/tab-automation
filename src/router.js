@@ -18,14 +18,15 @@ export function routerDispatcher() {
 
 export const routerDir = (root, id) => path.join(root, "data", "router", String(id).replace(/[^\w-]/g, "").slice(0, 40) || "adhoc");
 
-export function buildRouterPrompt({ text, user, history = [], automations = [], pipelines = [], todos = [], now = new Date() }) {
+export function buildRouterPrompt({ text, user, history = [], automations = [], pipelines = [], todos = [], files = [], now = new Date() }) {
   const ist = new Date(now.getTime() + 5.5 * 3600_000).toISOString().slice(0, 16).replace("T", " ");
   const hist = history.length ? history.map((h) => `[${h.user}]: ${String(h.text).slice(0, 300)}`).join("\n") : "(none)";
   const autos = automations.length ? automations.map((a) => `- ${a.id}${a.command ? ` (!${a.command})` : ""}: ${a.description || a.name || ""}`.trim()).join("\n") : "(none)";
   const pipes = pipelines.length ? pipelines.map((p) => `- ${p.id}: ${p.name}${p.description ? ` — ${p.description}` : ""} [${(p.steps || []).map((s) => s.role).join(" → ")}]`).join("\n") : "(none)";
   const td = todos.length ? todos.map((t) => `- ${t.id}: ${t.text}${t.due ? ` (due ${t.due})` : ""}`).join("\n") : "(none)";
+  const fl = files.length ? files.map((f) => `- ${f.path}${f.summary ? ` — ${f.summary}` : ""}`).join("\n") : "(none)";
   return `You are Harness, the intent router for a personal automation assistant on Discord.
-Decide what to do with the user's message. Do NOT do the work yourself, do NOT call tools, do NOT edit files.
+You have READ-ONLY tools: use them to inspect context (read files, list automations/tasks, check runs) before deciding. Do NOT do the work yourself, do NOT edit files, do NOT launch anything — just decide.
 Reply with ONLY one JSON object, no prose, no code fences.
 
 Now: UTC ${now.toISOString().slice(0, 16).replace("T", " ")}, IST ${ist}. Assume IST unless the user says otherwise.
@@ -50,6 +51,9 @@ ${pipes}
 
 Open todos:
 ${td}
+
+Repo files of interest (read-only, use read tools to inspect):
+${fl}
 
 Recent channel conversation (oldest first):
 ${hist}
@@ -90,8 +94,8 @@ export async function routeIntent(cfg, { id, prompt, timeoutMs = 120000 }) {
     const promptFile = path.join(dir, "prompt.md");
     writeFileSync(promptFile, prompt);
     const r = await getDispatcher(dispatcher).dispatch(cfg, {
-      key: `router:${id}`, role: "assistant", model: "", cwd: dir, promptFile, promptText: prompt,
-      taskDir: dir, transcriptPath: path.join(dir, "transcript.jsonl"), timeoutMs, maxModelSteps: 4, mcp: false,
+      key: `router:${id}`, role: "assistant", model: "", cwd: cfg.root, promptFile, promptText: prompt,
+      taskDir: dir, transcriptPath: path.join(dir, "transcript.jsonl"), timeoutMs, maxModelSteps: 40, mcp: true,
     });
     const text = finalAssistantText(r.stdout) || r.stdout;
     const decision = parseDecision(text);
