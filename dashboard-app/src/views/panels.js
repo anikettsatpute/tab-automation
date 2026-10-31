@@ -66,13 +66,34 @@ export function brainView() {
   <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5">${emptyState("brain", "No messages", "Discord mentions will land here.")}</td></tr>`}
   </tbody></table></div>
   ${sel ? `<div class="appr" role="dialog" aria-modal="false" aria-label="Message details" id="brain-drawer"><div class="row"><b>Message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx" aria-label="Close message details">${icon("x")}</button></div>
-  <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">${icon("terminal")} Session</button></div>
+  <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "decider" ? "on" : ""}" data-btab2="decider">${icon("bot")} Decider agent</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">${icon("terminal")} Pipeline session</button></div>
   ${S.brainTab === "details" ? `<div class="grid2"><span>Job ID</span><span class="kbd">${esc(sel.jobId || sel.id || "")}</span><span>Actor ID</span><span class="kbd">${esc(sel.actorId || "—")}</span><span>Conversation</span><span class="kbd">${esc(sel.conversationId || sel.channelId || "—")}</span><span>Updated</span><span>${esc(String(ts(sel)).slice(0, 19).replace("T", " "))}</span></div>
   ${sel.linkedTaskId ? `<p class="dim">Linked work: <span class="kbd">${esc(sel.linkedTaskId)}</span></p>` : ""}
   ${sel.processingError ? `<div class="status bad">${esc(sel.processingError)}</div>` : ""}
   <p class="dim">From <b>${esc(sel.sender)}</b> · status ${esc(st(sel))}</p><div class="endgoal">${esc(String(txt(sel)).slice(0, 2000))}</div>
   ${sel.requestText ? `<p class="dim">Request:</p><pre class="out">${esc(String(sel.requestText).slice(0, 1000))}</pre>` : ""}`
+  : S.brainTab === "decider" ? brainDecider(sel)
   : brainSession(sel)}</div>` : ""}</div>`;
+}
+
+// Decider agent tab: ONLY the router transcript — what the assistant that
+// decided on this message saw and did. Never mixed with pipeline detail.
+function brainDecider(sel) {
+  const key = `brain:${sel.id}`;
+  const s = S.chats?.[key];
+  const r = s?.router || null;
+  const d = r?.decision || null;
+  const head = `<div class="sessgrid"><span>Runner</span><span>${esc(r?.dispatcher === "copilot" ? "GitHub Copilot CLI" : r?.dispatcher === "muse" ? "Muse CLI" : "Keyword router (no AI session)")}</span>
+  ${r?.sessionId ? `<span>Session</span><span class="kbd">${esc(r.sessionId)}</span>` : ""}
+  ${d ? `<span>Decision</span><span><b>${esc(d.action)}</b>${d.automationId ? ` · ${esc(d.automationId)}` : ""}${d.taskType ? ` · ${esc(d.taskType)}` : ""}</span><span>Why</span><span>${esc(d.reason || "—")}</span>` : ""}
+  ${d?.goal ? `<span>Goal</span><span>${esc(d.goal)}</span>` : ""}
+  ${d?.question ? `<span>Asked</span><span>${esc(d.question)}</span>` : ""}
+  ${r?.durationMs ? `<span>Duration</span><span>${(r.durationMs / 1000).toFixed(1)}s${r.exitCode != null ? ` · exit ${r.exitCode}` : ""}</span>` : ""}
+  ${r?.error ? `<span>Error</span><span>${esc(r.error)}</span>` : ""}
+  ${sel.linkedTaskId ? `<span>Linked work</span><span class="kbd">${esc(sel.linkedTaskId)}</span>` : ""}</div>`;
+  return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}
+  <div class="lsec-h">${icon("bot")} Transcript — prompt, thinking, tool calls, decision</div>${s.chat ? chatView(s.chat, `${key}:router`) : `<p class="hint">No CLI session for this message (keyword router decided without AI, or the transcript is still writing).</p>`}
+  ${s.prompt ? `<details><summary class="hint">Full router prompt (${s.prompt.length.toLocaleString()} chars)</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}`}</div>`;
 }
 
 function brainSession(sel) {
@@ -96,8 +117,6 @@ function brainSession(sel) {
   const attempts = (s?.attempts || []).length ? `<div class="lsec-h">${icon("terminal")} Agent sessions (${s.attempts.length})</div>${s.attempts.map((a) => `<div class="row"><span class="kbd">${esc(a.role)}</span><span class="hint">step ${a.pos + 1} · attempt ${a.attempt} · ${esc(a.dispatcher === "copilot" ? "Copilot" : "Muse")}${a.model ? ` · ${esc(a.model)}` : ""}${a.duration_ms ? ` · ${(a.duration_ms / 1000).toFixed(0)}s` : ""}</span><span class="spacer"></span>${lpill(a.status)}</div><div data-chatload="loop:${esc(a.id)}" data-task="${esc(taskId)}">${chatView(S.chats?.[`loop:${a.id}`] || { loading: a.status === "running" }, `loop:${a.id}`)}</div>`).join("")}` : "";
   const artifacts = (s?.artifacts || []).length ? `<div class="lsec-h">${icon("file-plus")} Artifacts (${s.artifacts.length})</div>${s.artifacts.map((a) => `<div class="dgcard"><b>${esc(a.title || a.kind)}</b> <span class="kbd">${esc(a.kind)}</span>${a.path ? ` <span class="hint">${esc(a.path)}</span>` : ""}${a.kind === "link" && a.body ? ` <a href="${esc(a.body)}" target="_blank" rel="noopener">${esc(a.body.slice(0, 80))}</a>` : ""}${a.kind !== "link" && a.body ? `<div class="mdbox" style="margin-top:6px">${esc(String(a.body).slice(0, 500))}</div>` : ""}</div>`).join("")}` : "";
   return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}
-  <div class="lsec-h">${icon("bot")} Decider agent — what it saw and did</div>${s.chat ? chatView(s.chat, `${key}:router`) : `<p class="hint">No CLI session for this message (keyword router decided without AI, or the transcript is still writing).</p>`}
-  ${s.prompt ? `<details><summary class="hint">Full router prompt (${s.prompt.length.toLocaleString()} chars)</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}
   ${tasks}${steps}${attempts}${artifacts}`}</div>`;
 }
 
