@@ -42,13 +42,13 @@
     },
     {
       "id": "coding",
-      "name": "Coding (branch → test → PR)",
-      "description": "Build a feature or fix in this repo (dashboard app included): code on an isolated worktree branch, test, review, then open a GitHub PR. Never touches main.",
+      "name": "Coding (branch → test → PR, human merges)",
+      "description": "Build a feature or fix in this repo (dashboard app included): code on an isolated worktree branch, test (with dashboard screenshots for UI changes), review, then open a GitHub PR for human review. Agents never merge, never touch main.",
       "steps": [
         { "role": "dash-coder", "goal": "Create a git worktree under data/worktrees on a new agent/* branch from origin/main, implement the end goal there, rebuild the dashboard if dashboard-app changed, and commit. Hand off the worktree path, branch, and changed files." },
-        { "role": "dash-tester", "goal": "In the handed-off worktree, add/update tests for the change, run npm test (and npm run dashboard:build if the dashboard changed), fix small breakages, commit, and report PASS/FAIL with output. Fail if anything is red." },
+        { "role": "dash-tester", "goal": "In the handed-off worktree, add/update tests for the change, run npm test (and npm run dashboard:build if the dashboard changed), fix small breakages, commit, and report PASS/FAIL with output. If dashboard-app/ changed in a user-visible way, capture a headless-chrome screenshot of the affected view into the task workspace and emit it as a file artifact. Fail if anything is red." },
         { "role": "critic", "goal": "Review `git diff origin/main...HEAD` in the handed-off worktree against the end goal. Fail on any high-severity hole (security, data loss, broken UI); otherwise list remaining nits for the PR body." },
-        { "role": "dash-pr", "goal": "Push the handed-off agent/* branch and open a pull request against main via the GitHub MCP tool, including test evidence and reviewer notes. Return the PR URL as a link artifact." }
+        { "role": "dash-pr", "goal": "Push the handed-off agent/* branch and open a pull request against main via the GitHub MCP tool, including test evidence, screenshot artifacts, and reviewer notes. Return the PR URL as a link artifact. Do NOT merge — the human merges after review." }
       ]
     }
   ]
