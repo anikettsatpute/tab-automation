@@ -1,0 +1,15 @@
+{
+  "taskTypes": [
+    {
+      "id": "generic",
+      "name": "Generic task",
+      "description": "Plan, execute, review, summarize. Works for most requests.",
+      "steps": [
+        { "role": "analyst", "goal": "Understand the goal, gather the context needed, and write a short concrete plan." },
+        { "role": "coder", "goal": "Execute the plan. Produce the actual deliverable (code, document, or answer)." },
+        { "role": "critic", "goal": "Review the deliverable against the end goal. Fix small issues directly; report anything unresolved." },
+        { "role": "writer", "goal": "Write the final user-facing summary of what was done and where the outputs are." }
+      ]
+    }
+  ]
+}

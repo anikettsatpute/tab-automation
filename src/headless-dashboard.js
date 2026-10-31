@@ -23,6 +23,7 @@ import { registerRequestRoutes } from "./routes/requests.js";
 import { registerAutomationRoutes } from "./routes/automations.js";
 import { registerJobRoutes } from "./routes/jobs.js";
 import { registerEventRoutes } from "./routes/events.js";
+import { registerLoopRoutes } from "./routes/loop.js";
 
 const DEFAULT_ROOT = process.cwd();
 
@@ -154,6 +155,7 @@ export function createHeadlessApp(cfg, { root = cfg?.root || DEFAULT_ROOT, log =
   registerAutomationRoutes(app, ctx);
   registerJobRoutes(app, ctx);
   registerEventRoutes(app, ctx);
+  registerLoopRoutes(app, ctx);
 
   return { app, root, cfg, log };
 }
@@ -182,6 +184,13 @@ export async function startHeadlessDashboard(cfg, { log = console.log, worker = 
       startWorker(cfg, wdeps);
     } catch (err) {
       log(`[dashboard] worker start skipped: ${err.message}`);
+    // OrchestratorLoop engine: always auto, one step at a time.
+    try {
+      const { startEngine } = await import("./loop/engine.js");
+      startEngine({ ...cfg, root }, { log });
+    } catch (err) {
+      log(`[dashboard] loop engine start skipped: ${err.message}`);
+    }
     }
   }
 
@@ -205,6 +214,7 @@ export async function startHeadlessDashboard(cfg, { log = console.log, worker = 
     return c.text("dist-dashboard/ missing. Run: npm run dashboard:build", 500);
   });
   app.get("/", (c) => c.redirect("/dashboard"));
+    try { const { stopEngine } = await import("./loop/engine.js"); stopEngine(); } catch { /* ignore */ }
 
   const PORT = Number(process.env.HEADLESS_PORT || process.env.DASHBOARD_PORT || 3001);
   const server = serve({ fetch: app.fetch, port: PORT }, () => {
