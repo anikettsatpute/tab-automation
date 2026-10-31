@@ -167,10 +167,15 @@ function signInBlock(s) {
   const waiting = S.mcpAuthWait === s.id;
   const needClient = S.mcpNeedClient === s.id || (si.kind !== "discover" && !si.clientSet);
   const what = si.kind === "provider" ? `Sign in with ${esc(si.label)}` : "Sign in";
-  const clientFields = `<div class="row">
-      ${fld("OAuth client ID", `<input id="mcp-cid-${id}" autocomplete="off" spellcheck="false" placeholder="${si.clientSet ? "saved — type to replace" : ""}">`, "grow")}
-      ${fld("Client secret", `<input id="mcp-csec-${id}" type="password" autocomplete="off" placeholder="${si.clientSet ? "saved — type to replace" : "if the app has one"}">`, "grow")}</div>
-    <p class="hint">${si.clientHint ? `${esc(si.clientHint)} ` : ""}Redirect URI: <span class="kbd">${esc(redirectUri())}</span>${si.helpUrl ? ` · <a href="${esc(si.helpUrl)}" target="_blank" rel="noopener noreferrer">open console</a>` : ""}</p>`;
+  const steps = si.provider === "google" ? `<ol class="hint">
+      <li><a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener noreferrer">Enable the Gmail API</a> in a Google Cloud project.</li>
+      <li><a href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">OAuth consent screen</a>: User type <b>External</b>, and add your Google address under <b>Test users</b> (otherwise Google says "access blocked").</li>
+      <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Credentials</a> → Create credentials → OAuth client ID → <b>Web application</b> → Authorized redirect URI: <span class="kbd">${esc(redirectUri())}</span> <button type="button" class="btn sm ghost" data-copy="${esc(redirectUri())}">Copy</button></li>
+      <li>Paste the Client ID and secret below, press Sign in. On "Google hasn't verified this app" choose <b>Advanced → Continue</b>.</li></ol>`
+    : `<p class="hint">${si.clientHint ? `${esc(si.clientHint)} ` : ""}Redirect URI: <span class="kbd">${esc(redirectUri())}</span> <button type="button" class="btn sm ghost" data-copy="${esc(redirectUri())}">Copy</button>${si.helpUrl ? ` · <a href="${esc(si.helpUrl)}" target="_blank" rel="noopener noreferrer">open console</a>` : ""}</p>`;
+  const clientFields = `${si.clientSet ? "" : steps}<div class="row">
+      ${fld("OAuth client ID", `<input id="mcp-cid-${id}" autocomplete="off" spellcheck="false" placeholder="${si.clientSet ? "saved — type to replace" : "…apps.googleusercontent.com"}">`, "grow")}
+      ${fld("Client secret", `<input id="mcp-csec-${id}" type="password" autocomplete="off" placeholder="${si.clientSet ? "saved — type to replace" : "if the app has one"}">`, "grow")}</div>`;
   const advanced = `
     ${si.kind === "custom" ? `<div class="row">
       ${fld("Authorization endpoint (https)", `<input id="mcp-authep-${id}" value="${esc(si.authorizationEndpoint)}" placeholder="https://provider.com/oauth/authorize">`, "grow")}
@@ -187,6 +192,7 @@ function signInBlock(s) {
       ${o?.canRefresh ? `<button type="button" class="btn sm ghost" data-mcprefresh="${id}">${icon("refresh-cw")} Refresh</button>` : ""}
       ${o?.signedIn ? `<button type="button" class="btn sm ghost" data-mcpsignout="${id}">${icon("log-out")} Sign out</button>` : ""}
       <button type="button" class="btn sm ${o?.signedIn ? "" : "primary"}" data-mcpauth="${id}" ${waiting ? "disabled" : ""}>${icon("key-round")} ${o?.signedIn ? "Sign in again" : what}</button></div>
+    ${S.mcpAuthErr?.id === s.id ? `<div class="notice bad" role="alert">${icon("alert-triangle")} ${esc(S.mcpAuthErr.msg)}</div>` : ""}
     ${needClient ? clientFields : ""}
     <details><summary class="hint">Advanced${si.kind === "discover" && !needClient ? " (own OAuth app, scopes)" : " (scopes)"}</summary>
       ${si.kind === "discover" && !needClient ? clientFields : ""}${advanced}</details>`;

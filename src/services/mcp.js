@@ -118,7 +118,7 @@ export function publicServer(s, agents = []) {
     enabled: s.enabled !== false,
     secrets: (s.secrets || []).map((sl) => ({ slot: sl.slot, label: sl.label || "", key: secretKey(s.num, sl.slot), set: !!envVal(secretKey(s.num, sl.slot)) })),
     oauth: s.oauth ? { authorizationEndpoint: s.oauth.authorizationEndpoint || "", tokenEndpoint: s.oauth.tokenEndpoint || "", scope: s.oauth.scope || "", accessEnv: s.oauth.accessEnv || "",
-      signedIn: !!envVal(secretKey(s.num, "ACCESS_TOKEN")), signedInAt: s.oauth.signedInAt || "", expiresAt: Number(envVal(secretKey(s.num, "EXPIRES_AT"))) || 0, canRefresh: !!envVal(secretKey(s.num, "REFRESH_TOKEN")) } : null,
+      signedIn: !!envVal(secretKey(s.num, "ACCESS_TOKEN")), signedInAt: s.oauth.signedInAt || "", lastError: s.oauth.lastError || "", lastErrorAt: s.oauth.lastErrorAt || "", expiresAt: Number(envVal(secretKey(s.num, "EXPIRES_AT"))) || 0, canRefresh: !!envVal(secretKey(s.num, "REFRESH_TOKEN")) } : null,
     signIn: signInInfo(s),
     authHint: s.authHint || "", lastTestedAt: s.lastTestedAt || "",
     ...st,

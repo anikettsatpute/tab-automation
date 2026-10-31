@@ -137,13 +137,19 @@ async function saveCfg() {
 async function waitForSignIn(id) {
   S.mcpAuthWait = id; render();
   const MCP = "/api/control/mcp";
-  const before = S.mcp?.servers.find((x) => x.id === id)?.oauth?.signedInAt || "";
+  const prev = S.mcp?.servers.find((x) => x.id === id)?.oauth || {};
+  const before = prev.signedInAt || "", errBefore = prev.lastErrorAt || "";
   const until = Date.now() + 5 * 60000;
   while (S.mcpAuthWait === id && Date.now() < until) {
     await new Promise((r) => setTimeout(r, 2500));
     try {
       const r = await api(MCP);
       const s = r.servers.find((x) => x.id === id);
+      if (s?.oauth?.lastErrorAt && s.oauth.lastErrorAt !== errBefore) {
+        S.mcp = r; S.mcpAuthWait = null;
+        S.mcpAuthErr = { id, msg: `Google/provider returned: ${s.oauth.lastError}${/redirect_uri_mismatch/.test(s.oauth.lastError) ? ` — add ${location.origin}/api/control/mcp/oauth/callback to the OAuth client's redirect URIs.` : ""}` };
+        render(); return;
+      }
       if (s?.oauth?.signedIn && s.oauth.signedInAt && s.oauth.signedInAt !== before) {
         S.mcp = r; S.mcpAuthWait = null;
         cfgNotice(`Signed in to ${id} — testing…`); render();
@@ -298,17 +304,25 @@ function wireConfig() {
     const clientId = val(`#mcp-cid-${id}`);
     if (clientId) { body.clientId = clientId; body.clientSecret = val(`#mcp-csec-${id}`) || ""; }
     for (const [k, sel] of [["scope", `#mcp-scope-${id}`], ["tokenEnv", `#mcp-tokenv-${id}`], ["authorizationEndpoint", `#mcp-authep-${id}`], ["tokenEndpoint", `#mcp-tokep-${id}`]]) { const el = $(sel); if (el) body[k] = el.value.trim(); }
+    const si = S.mcp?.servers.find((x) => x.id === id)?.signIn || {};
+    const fail = (msg) => { S.mcpAuthErr = { id, msg }; render(); $(`#mcp-cid-${id}`)?.focus(); };
+    if (!clientId && !si.clientSet && si.kind !== "discover") { S.mcpNeedClient = id; fail("Paste your OAuth Client ID first (steps above). Google has no auto-registration, so each install needs its own client."); return; }
+    S.mcpAuthErr = null;
     const win = window.open("about:blank", "_blank");
     try {
       const r = await api(`${MCP}/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify(body) }, { timeoutMs: 30000 });
       if (win) { win.opener = null; win.location.href = r.authorizeUrl; } else window.open(r.authorizeUrl, "_blank", "noopener");
       S.mcpNeedClient = null;
+      S.mcp = await api(MCP).catch(() => S.mcp);
       waitForSignIn(id);
     } catch (e) {
       try { win?.close(); } catch {}
-      if (/NEED_CLIENT/.test(e.message)) { S.mcpNeedClient = id; cfgNotice(`${id} needs an OAuth app (client ID) first — fill it in below and press Sign in again.`, true); render(); }
-      else cfgNotice(`Sign-in: ${e.message}`, true);
+      if (/NEED_CLIENT/.test(e.message)) { S.mcpNeedClient = id; fail("This provider needs an OAuth app first — follow the steps above, paste the Client ID, then Sign in."); }
+      else fail(`Sign-in failed: ${e.message}`);
     }
+  }));
+  $$("[data-copy]").forEach((b) => (b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { prompt("Copy this:", b.dataset.copy); }
   }));
   $$("[data-mcpauthcancel]").forEach((b) => (b.onclick = () => { S.mcpAuthWait = null; render(); }));
   $$("[data-mcpsignout]").forEach((b) => (b.onclick = () => {

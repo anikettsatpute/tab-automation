@@ -294,7 +294,11 @@ export function registerMcpRoutes(app, ctx) {
     const esc = (t) => String(t).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
     const state = c.req.query("state") || "";
     const sess = oauthSessions.get(state);
-    if (c.req.query("error")) return page("Sign-in denied", esc(`${c.req.query("error")}: ${c.req.query("error_description") || ""}`), 400);
+    const recordError = (msg) => {
+      if (!sess) return;
+      try { const { doc, s } = find(sess.id); if (s?.oauth) { s.oauth.lastError = String(msg).slice(0, 300); s.oauth.lastErrorAt = new Date().toISOString(); writeTools(root, doc); } } catch {}
+    };
+    if (c.req.query("error")) { recordError(`${c.req.query("error")}: ${c.req.query("error_description") || ""}`); oauthSessions.delete(state); return page("Sign-in denied", esc(`${c.req.query("error")}: ${c.req.query("error_description") || ""}`), 400); }
     if (!sess || !c.req.query("code")) return page("Sign-in expired", "Unknown or expired sign-in. Start again from the dashboard.", 400);
     oauthSessions.delete(state);
     try {
@@ -305,11 +309,11 @@ export function registerMcpRoutes(app, ctx) {
       const t = await exchangeCode(sess.tokenEndpoint, { code: c.req.query("code"), redirectUri: sess.redirectUri, verifier: sess.verifier, clientId: env("CLIENT_ID"), clientSecret: env("CLIENT_SECRET") });
       saveTokens(root, s, t);
       s.authStatus = "ok"; s.authHint = "";
-      if (s.oauth) s.oauth.signedInAt = new Date().toISOString();
+      if (s.oauth) { s.oauth.signedInAt = new Date().toISOString(); delete s.oauth.lastError; delete s.oauth.lastErrorAt; }
       writeTools(root, doc);
       await audit(c, "mcp.oauth.done", s.id, t.refresh_token ? "with refresh" : "no refresh");
       return page("Signed in", `${esc(s.name || s.id)} is connected. Token saved as <code>${secretKey(s.num, "ACCESS_TOKEN")}</code>${t.refresh_token ? " (auto-refresh on)" : ""}. You can close this tab.`);
-    } catch (e) { return page("Sign-in failed", esc(String(e.message).slice(0, 300)), 502); }
+    } catch (e) { recordError(e.message); return page("Sign-in failed", esc(String(e.message).slice(0, 300)), 502); }
   });
 
   app.post("/api/control/mcp/:id/oauth/refresh", async (c) => {
