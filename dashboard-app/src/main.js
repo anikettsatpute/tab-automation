@@ -79,6 +79,9 @@ function routeHash() {
 }
 function syncHash() {
   try {
+    // Don't clobber a deep link before boot applies it: first render happens
+    // with default state while auth/data is still loading.
+    if (!S.routeInit) return;
     const h = routeHash();
     if (location.hash !== h) history.pushState(null, "", h);
   } catch {}
@@ -1033,9 +1036,12 @@ document.addEventListener("keydown", (e) => {
 });
 // Single boot: one poll tick + feed SSE + loop SSE (opened after auth in tick).
 // Hash routing: restore view from URL on load, follow back/forward buttons.
+// syncFromHash runs BEFORE routeInit flips, so the first render() keeps the
+// deep-linked view instead of syncHash() clobbering it back to #/board.
 if (!S.routeInit) {
+  const hadRoute = syncFromHash();
   S.routeInit = true;
-  if (syncFromHash()) {
+  if (hadRoute) {
     // Defer task-drawer open until first data lands (tick -> loadDetail).
     const sel = S._routeSel; delete S._routeSel;
     if (sel && S.view === "board") {
