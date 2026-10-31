@@ -143,3 +143,46 @@ test("firstLinkUrl: first link artifact URL, empty when absent", async () => {
     { kind: "link", title: "second", body: "https://example.com/2" },
   ]), "https://github.com/o/r/pull/7");
 });
+
+test("postLoopResult: Discord report appends first link URL when present, omits cleanly when absent", async () => {
+  const { postLoopResult } = await import("../../src/discord.js");
+  const store = await import("../../src/loop/store.js");
+  const root = getRoot();
+  const cfg = { root };
+  const CHANNEL = "123456789";
+  const reqId = store.createRequest(root, { text: "ship it", mode: "direct", source: `discord:${CHANNEL}:987654321`, dispatcher: "muse" });
+  const mkTask = () => {
+    const id = store.createTask(root, { requestId: reqId, title: "t", taskType: "quick", steps: [{ role: "dash-coder" }, { role: "dash-tester" }] });
+    store.updateStep(root, id, 0, { status: "done", output: "final answer here" });
+    return id;
+  };
+  // Present: link line appended with the FIRST link artifact URL.
+  const withLink = mkTask();
+  store.addArtifact(root, withLink, { kind: "link", title: "PR #7", body: "https://github.com/o/r/pull/7" });
+  store.addArtifact(root, withLink, { kind: "link", title: "second", body: "https://example.com/2" });
+  const sent = [];
+  await postLoopResult(cfg, async (ch, msg) => { sent.push({ ch, msg }); }, { type: "task", status: "done", taskId: withLink });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].ch, CHANNEL);
+  assert.ok(sent[0].msg.includes("✅"), "done head kept");
+  assert.ok(sent[0].msg.includes("final answer here"), "step output kept");
+  assert.ok(sent[0].msg.includes("\n🔗 https://github.com/o/r/pull/7"), "first link URL appended on its own line");
+  assert.ok(!sent[0].msg.includes("https://example.com/2"), "second link URL not included");
+  // Absent: message still sends, with no dangling link line.
+  const noLink = mkTask();
+  store.addArtifact(root, noLink, { kind: "file", title: "notes", body: "hello", path: "a.md" });
+  const sent2 = [];
+  await postLoopResult(cfg, async (ch, msg) => { sent2.push({ ch, msg }); }, { type: "task", status: "done", taskId: noLink });
+  assert.equal(sent2.length, 1);
+  assert.ok(!sent2[0].msg.includes("🔗"), "no link line when no link artifact");
+  assert.ok(sent2[0].msg.endsWith("final answer here"), "message ends cleanly on the body");
+  // Non-terminal / non-task / non-discord events stay silent.
+  const sent3 = [];
+  const send3 = async (ch, msg) => { sent3.push({ ch, msg }); };
+  await postLoopResult(cfg, send3, { type: "task", status: "running", taskId: withLink });
+  await postLoopResult(cfg, send3, { type: "step", status: "done", taskId: withLink });
+  const dashReq = store.createRequest(root, { text: "dash", mode: "direct", source: "dashboard", dispatcher: "muse" });
+  const dashTask = store.createTask(root, { requestId: dashReq, title: "d", steps: [{ role: "dash-coder" }] });
+  await postLoopResult(cfg, send3, { type: "task", status: "done", taskId: dashTask });
+  assert.equal(sent3.length, 0, "no send for running/non-task/non-discord events");
+});

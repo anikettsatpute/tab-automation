@@ -88,8 +88,9 @@ export function firstLinkUrl(artifacts) {
 }
 
 /** Loop pipelines filed from Discord (request.source = "discord:<channel>")
- *  report back to that channel when each task reaches a terminal state. */
-async function postLoopResult(cfg, send, ev) {
+ *  report back to that channel when each task reaches a terminal state.
+ *  Exported for tests (wired via onLoopEvent in startDiscord). */
+export async function postLoopResult(cfg, send, ev) {
   if (ev?.type !== "task" || !["done", "failed", "blocked"].includes(ev.status)) return;
   const store = await import("./loop/store.js");
   const task = store.getTask(cfg.root, ev.taskId);

@@ -393,6 +393,40 @@ test("diagrams tab: link artifacts render as clickable anchors (new tab, no open
   assert.equal((html.match(/<a /g) || []).length, 1, "only the link artifact becomes an anchor");
 });
 
+test("diagrams tab: link edge cases — absent, untitled, uppercase scheme, query escaping", () => {
+  const src = loopSrc.slice(loopSrc.indexOf("const mmd = "), loopSrc.indexOf("export function diagramFull")).replace(/export (const|function) /g, "$1 ");
+  const { diagramsTab, linkCard } = new Function("diagramsList", "esc", "icon", "md", `${src}; return { diagramsTab, linkCard };`)(
+    () => [], escHtml, () => "", (s) => escHtml(s)
+  );
+  // Absent: no link artifacts -> zero anchors, sections intact.
+  const noLinks = diagramsTab({
+    steps: [], artifacts: [
+      { kind: "file", title: "notes", body: "hello", path: "a/b.md", pos: 0, attempt: 1 },
+    ],
+  });
+  assert.ok(!noLinks.includes("<a "), "no anchors without link artifacts");
+  assert.ok(noLinks.includes("Other artifacts"), "section kept");
+  const empty = diagramsTab({ steps: [], artifacts: [] });
+  assert.ok(!empty.includes("<a "), "no anchors for empty artifacts");
+  assert.ok(empty.includes("No diagrams yet"), "empty hint kept");
+  // Unsafe URL inside the full tab stays text.
+  const unsafeTab = diagramsTab({
+    steps: [], artifacts: [{ kind: "link", title: "evil", body: "javascript:alert(1)", pos: 0, attempt: 1 }],
+  });
+  assert.ok(!unsafeTab.includes("<a "), "javascript: URL is not an anchor in the tab");
+  assert.ok(unsafeTab.includes("Other artifacts"), "unsafe link still listed");
+  // Untitled link falls back to the URL as label.
+  assert.match(
+    linkCard({ title: "", body: "https://example.com/pr/9" }),
+    /<a href="https:\/\/example\.com\/pr\/9" target="_blank" rel="noopener">https:\/\/example\.com\/pr\/9<\/a>/
+  );
+  // Uppercase scheme still anchors; query params are escaped in href.
+  assert.ok(linkCard({ title: "U", body: "HTTPS://example.com/x" }).includes("<a "), "uppercase scheme anchors");
+  const q = linkCard({ title: "Q", body: "https://example.com/p?a=1&b=2" });
+  assert.ok(q.includes('href="https://example.com/p?a=1&amp;b=2"'), "ampersand escaped in href");
+  assert.ok(q.includes('target="_blank" rel="noopener"'), "target/rel kept with query URL");
+});
+
 test("config view: sectioned tabs, builders wired, dirty edits survive the tick", () => {
   const cfgSrc = readFileSync("dashboard-app/src/views/config.js", "utf8");
   const mainSrc = readFileSync("dashboard-app/src/main.js", "utf8");
