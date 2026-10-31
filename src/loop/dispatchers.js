@@ -60,7 +60,7 @@ export const muse = {
     const r = spawnSync(museBin(), ["--version"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
     return r.status === 0 ? { ok: true, version: String(r.stdout).trim() } : { ok: false, error: r.error?.message || String(r.stderr || "").trim() || "muse not found" };
   },
-  async dispatch(cfg, { key, role, model, cwd, promptFile, transcriptPath, timeoutMs = 900000, maxModelSteps = 60, outputSchema = null, mcp: useMcp = true }) {
+  async dispatch(cfg, { key, role, model, cwd, promptFile, transcriptPath, timeoutMs = 900000, maxModelSteps = 20, outputSchema = null, mcp: useMcp = true }) {
     const sessionId = randomUUID();
     const args = [
       "exec", "--provider", "meta", "--model", model || "muse-spark-1.3", "--contributor-mode", "on",

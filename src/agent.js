@@ -194,7 +194,7 @@ async function dispatchViaMuse(cfg, { agent, base, model, prompt, extraContext =
   const args = [
     "exec", "--provider", "meta", "--model", museModel, "--contributor-mode", "on",
     "--approval-mode", "never",
-    "--max-model-steps", "25",
+    "--max-model-steps", "20",
     "--max-tool-output-bytes", "24000",
     "--session-id", cliSession,
     "--prompt-file", promptTmp,

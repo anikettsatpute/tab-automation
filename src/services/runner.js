@@ -11,7 +11,7 @@ import { resolveMuseApiKey } from "../providers.js";
 
 const DEFAULT_BUDGETS = {
   wallMs: 300000,          // 5 min wall clock per step
-  maxModelSteps: 25,       // --max-model-steps cap
+  maxModelSteps: 20,       // --max-model-steps cap
   maxToolBytes: 24000,     // --max-tool-output-bytes cap
 };
 

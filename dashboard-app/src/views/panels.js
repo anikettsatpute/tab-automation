@@ -97,7 +97,7 @@ function brainSession(sel) {
   const artifacts = (s?.artifacts || []).length ? `<div class="lsec-h">${icon("file-plus")} Artifacts (${s.artifacts.length})</div>${s.artifacts.map((a) => `<div class="dgcard"><b>${esc(a.title || a.kind)}</b> <span class="kbd">${esc(a.kind)}</span>${a.path ? ` <span class="hint">${esc(a.path)}</span>` : ""}${a.kind === "link" && a.body ? ` <a href="${esc(a.body)}" target="_blank" rel="noopener">${esc(a.body.slice(0, 80))}</a>` : ""}${a.kind !== "link" && a.body ? `<div class="mdbox" style="margin-top:6px">${esc(String(a.body).slice(0, 500))}</div>` : ""}</div>`).join("")}` : "";
   return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}${tasks}${steps}${attempts}${artifacts}
   ${s.prompt ? `<details><summary class="hint">Router prompt</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}
-  <div class="lsec-h">${icon("terminal")} Router session</div>${s.chat ? chatView(s.chat, key) : `<p class="hint">No CLI session for this message.</p>`}`}</div>`;
+  <div class="lsec-h">${icon("terminal")} Router session — what the decider agent saw and did</div>${s.chat ? chatView(s.chat, `${key}:router`) : `<p class="hint">No CLI session for this message (keyword router decided without AI, or the transcript is still writing).</p>`}`}</div>`;
 }
 
 export function requestsView() {
