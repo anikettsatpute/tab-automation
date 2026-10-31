@@ -105,6 +105,20 @@ async function postLoopResult(cfg, send, ev) {
       if (row) updateBrainMessage(cfg.root, row.id, { processingStatus: ev.status === "done" ? "reply_generated" : "failed", outboxSummary: `task #${task.seq} ${ev.status}`, processingError: ev.status === "done" ? null : body.slice(0, 1000) });
     } catch {}
   }
+  // Task completion as its own trigger row: the Messages tab shows incoming
+  // triggers AND completions, so a finished pipeline is visible without
+  // opening the Board. Linked to the same request via linkedTaskId.
+  try {
+    const { fileBrainMessage } = await import("./db.js");
+    fileBrainMessage(cfg.root, {
+      jobId: `task-${task.id}`, actorId: "", conversationId: channelId,
+      sender: "pipeline", source: `task-completion:${ev.status}`,
+      messageText: `${head} Task #${task.seq} ${ev.status}: ${task.title}`.slice(0, 4000),
+      processingStatus: ev.status === "done" ? "reply_generated" : "failed",
+      linkedTaskId: req ? `req:${req.id}` : null,
+      requestText: body.slice(0, 4000),
+    });
+  } catch {}
 }
 
 export function startDiscord(cfg, deps) {

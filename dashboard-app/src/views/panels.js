@@ -89,9 +89,15 @@ function brainSession(sel) {
   ${r?.error ? `<span>Error</span><span>${esc(r.error)}</span>` : ""}
   ${sel.linkedTaskId ? `<span>Linked work</span><span class="kbd">${esc(sel.linkedTaskId)}</span>` : ""}</div>`;
   const tasks = (s?.tasks || []).length ? `<div class="lsec-h">${icon("list-ordered")} Pipeline tasks</div><ul class="plain">${s.tasks.map((t) => `<li><button type="button" class="btn sm ghost" data-gotask="${esc(t.id)}">#${esc(t.seq)} ${esc(t.title)}</button> ${lpill(t.status)}</li>`).join("")}</ul>` : "";
-  return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}${tasks}
+  // Full pipeline detail (steps, attempts, artifacts, events) when the
+  // backend provides it — same shape as the Board task drawer.
+  const steps = (s?.steps || []).length ? `<div class="lsec-h">${icon("list-ordered")} Steps</div>${s.steps.map((x) => `<div class="row"><span class="kbd">${x.pos + 1}</span><b>${esc(x.role)}</b><span class="hint">${esc(String(x.goal || "").slice(0, 80))}</span><span class="spacer"></span>${lpill(x.status)}</div>${x.summary ? `<div class="mdbox" style="margin:4px 0">${esc(String(x.summary).slice(0, 500))}</div>` : ""}`).join("")}` : "";
+  const taskId = (s?.tasks || [])[0]?.id || "";
+  const attempts = (s?.attempts || []).length ? `<div class="lsec-h">${icon("terminal")} Agent sessions (${s.attempts.length})</div>${s.attempts.map((a) => `<div class="row"><span class="kbd">${esc(a.role)}</span><span class="hint">step ${a.pos + 1} · attempt ${a.attempt} · ${esc(a.dispatcher === "copilot" ? "Copilot" : "Muse")}${a.model ? ` · ${esc(a.model)}` : ""}${a.duration_ms ? ` · ${(a.duration_ms / 1000).toFixed(0)}s` : ""}</span><span class="spacer"></span>${lpill(a.status)}</div><div data-chatload="loop:${esc(a.id)}" data-task="${esc(taskId)}">${chatView(S.chats?.[`loop:${a.id}`] || { loading: a.status === "running" }, `loop:${a.id}`)}</div>`).join("")}` : "";
+  const artifacts = (s?.artifacts || []).length ? `<div class="lsec-h">${icon("file-plus")} Artifacts (${s.artifacts.length})</div>${s.artifacts.map((a) => `<div class="dgcard"><b>${esc(a.title || a.kind)}</b> <span class="kbd">${esc(a.kind)}</span>${a.path ? ` <span class="hint">${esc(a.path)}</span>` : ""}${a.kind === "link" && a.body ? ` <a href="${esc(a.body)}" target="_blank" rel="noopener">${esc(a.body.slice(0, 80))}</a>` : ""}${a.kind !== "link" && a.body ? `<div class="mdbox" style="margin-top:6px">${esc(String(a.body).slice(0, 500))}</div>` : ""}</div>`).join("")}` : "";
+  return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}${tasks}${steps}${attempts}${artifacts}
   ${s.prompt ? `<details><summary class="hint">Router prompt</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}
-  <div class="lsec-h">${icon("terminal")} Session</div>${s.chat ? chatView(s.chat, key) : `<p class="hint">No CLI session for this message.</p>`}`}</div>`;
+  <div class="lsec-h">${icon("terminal")} Router session</div>${s.chat ? chatView(s.chat, key) : `<p class="hint">No CLI session for this message.</p>`}`}</div>`;
 }
 
 export function requestsView() {

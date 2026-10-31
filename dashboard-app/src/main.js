@@ -772,8 +772,11 @@ function loadVisibleChats() {
     if (S.chats[key] || chatInflight.has(key)) return;
     chatInflight.add(key);
     const [kind, a, b] = key.split(":");
+    // Brain attempt transcripts carry their task id (data-task); the Board
+    // drawer uses the selected task. Fall back to S.sel for legacy keys.
+    const taskId = el.dataset.task || S.sel;
     const url = kind === "brain" ? `/api/control/brain/${encodeURIComponent(a)}/session`
-      : kind === "loop" ? `${LOOP}/tasks/${encodeURIComponent(S.sel)}/attempts/${encodeURIComponent(a)}/chat` : `/api/control/task/${encodeURIComponent(a)}/sessions/${encodeURIComponent(b)}/export`;
+      : kind === "loop" ? `${LOOP}/tasks/${encodeURIComponent(taskId)}/attempts/${encodeURIComponent(a)}/chat` : `/api/control/task/${encodeURIComponent(a)}/sessions/${encodeURIComponent(b)}/export`;
     api(url, {}, { timeoutMs: 60000 })
       .then((r) => { S.chats[key] = kind === "brain" ? r : r.chat || { format: "none", items: [], meta: {} }; })
       .catch((e) => { S.chats[key] = { error: `Session unavailable: ${e.message}` }; })

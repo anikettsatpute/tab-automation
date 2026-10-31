@@ -296,13 +296,25 @@ export function registerRequestRoutes(app, ctx) {
       let router = null;
       try { router = row.session_log ? JSON.parse(row.session_log) : null; } catch {}
       const tx = read("transcript.jsonl", 2000000);
-      let tasks = [];
+      let tasks = [], steps = [], attempts = [], artifacts = [], events = [];
       const reqId = /^req:(\w+)$/.exec(row.linked_task_id || "")?.[1];
       if (reqId) {
         const store = await import("../loop/store.js");
-        tasks = (store.listRequests(root, { limit: 200 }).find((r) => r.id === reqId)?.tasks) || [];
+        const req = store.listRequests(root, { limit: 500 }).find((r) => r.id === reqId);
+        tasks = req?.tasks || [];
+        // Full pipeline detail for the first task: steps, attempts (with
+        // transcript paths), artifacts, events — same shape as the Board
+        // task drawer, so Messages shows the complete session.
+        const first = tasks[0];
+        if (first?.id) {
+          try {
+            const d = store.taskDetail(root, first.id);
+            steps = d?.steps || []; attempts = d?.attempts || [];
+            artifacts = d?.artifacts || []; events = d?.events || [];
+          } catch {}
+        }
       }
-      return c.json({ ok: true, router, prompt: read("prompt.md", 20000), chat: tx ? parseTranscript(tx) : null, tasks, requestId: reqId || null });
+      return c.json({ ok: true, router, prompt: read("prompt.md", 20000), chat: tx ? parseTranscript(tx) : null, tasks, requestId: reqId || null, steps, attempts, artifacts, events });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
