@@ -64,6 +64,42 @@ function renderRegion(sel, html) {
   el.innerHTML = html;
   return true;
 }
+// Hash routing: every view/tab is a URL so agents, screenshots, and humans
+// can link straight to it (#/board/tasks, #/config/mcp, #/board/tasks/<id>).
+// State stays the source of truth; the hash mirrors it (and restores it on load).
+const ROUTE_VIEWS = ["board", "brain", "todos", "automations", "config", "requests", "activity", "retro", "logs", "tools", "agents"];
+const ROUTE_CFGTABS = ["providers", "discord", "agents", "pipelines", "mcp", "secrets"];
+const ROUTE_BTABS = ["tasks", "runs"];
+function routeHash() {
+  let h = `#/${S.view}`;
+  if (S.view === "board" && S.boardTab && S.boardTab !== "tasks") h += `/${S.boardTab}`;
+  if (S.view === "board" && S.boardTab === "tasks" && S.sel) h += `/${S.sel}`;
+  if (S.view === "config" && S.cfgTab && S.cfgTab !== "providers") h += `/${S.cfgTab}`;
+  return h;
+}
+function syncHash() {
+  try {
+    const h = routeHash();
+    if (location.hash !== h) history.pushState(null, "", h);
+  } catch {}
+}
+function syncFromHash() {
+  try {
+    const parts = String(location.hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
+    if (!parts.length) return false;
+    const [view, sub, extra] = parts;
+    if (!ROUTE_VIEWS.includes(view)) return false;
+    S.view = view;
+    if (view === "board") {
+      if (ROUTE_BTABS.includes(sub)) S.boardTab = sub;
+      else S.boardTab = "tasks";
+      if (sub && !ROUTE_BTABS.includes(sub)) S._routeSel = sub;
+      else if (extra) S._routeSel = extra;
+    }
+    if (view === "config" && ROUTE_CFGTABS.includes(sub)) S.cfgTab = sub;
+    return true;
+  } catch { return false; }
+}
 function mainHtml() {
   // Access gate replaces private views until the browser holds a session.
   // The login form itself is the only thing rendered (no data leaks).
@@ -103,6 +139,7 @@ function render(background = false) {
   renderRegion("#rg-side", sidebar());
   renderRegion("#rg-top", topbar());
   renderRegion("#rg-main", mainHtml());
+  syncHash();
   renderRegion("#rg-modals", `${reqModal()}${cmdPalette()}${S.sel ? diagramFull(S.detail) : ""}`);
   mountTaskDrawer();
   paintDiagrams();
@@ -995,5 +1032,32 @@ document.addEventListener("keydown", (e) => {
   }
 });
 // Single boot: one poll tick + feed SSE + loop SSE (opened after auth in tick).
+// Hash routing: restore view from URL on load, follow back/forward buttons.
+if (!S.routeInit) {
+  S.routeInit = true;
+  if (syncFromHash()) {
+    // Defer task-drawer open until first data lands (tick -> loadDetail).
+    const sel = S._routeSel; delete S._routeSel;
+    if (sel && S.view === "board") {
+      const iv = setInterval(() => {
+        if ((S.loopTasks || []).some((t) => t.id === sel)) {
+          clearInterval(iv);
+          S.sel = sel; S.detailTab = "overview"; render(); loadDetail(sel);
+        }
+      }, 1000);
+      setTimeout(() => clearInterval(iv), 30000);
+    }
+  } else {
+    syncHash();
+  }
+  window.addEventListener("hashchange", () => {
+    if (syncFromHash()) {
+      const sel = S._routeSel; delete S._routeSel;
+      S.sel = null; S.detail = null;
+      if (sel && S.view === "board") openTask(sel);
+      else render();
+    }
+  });
+}
 connectFeedStream();
 tick();

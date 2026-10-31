@@ -261,7 +261,7 @@ test("explicit renders update open panels while background renders preserve inpu
   const updates = [];
   const app = { dataset: { booted: "1" } };
   const documentStub = { body: { dataset: {} }, activeElement: { tagName: "SELECT" }, querySelectorAll: () => [], getElementById: () => null };
-  const renderPanel = new Function("S", "document", "$", "renderRegion", "sidebar", "topbar", "mainHtml", "reqModal", "cmdPalette", "diagramFull", "refreshIcons", "paintRetroChart", "wireOnly", "mountTaskDrawer", "paintDiagrams", `${source}; return render;`)(state, documentStub, (selector) => selector === "#app" ? app : null, (selector) => updates.push(selector), ...Array(11).fill(() => ""));
+  const renderPanel = new Function("S", "document", "$", "renderRegion", "sidebar", "topbar", "mainHtml", "reqModal", "cmdPalette", "diagramFull", "refreshIcons", "paintRetroChart", "wireOnly", "mountTaskDrawer", "paintDiagrams", "syncHash", `${source}; return render;`)(state, documentStub, (selector) => selector === "#app" ? app : null, (selector) => updates.push(selector), ...Array(11).fill(() => ""), () => {});
   renderPanel();
   assert.ok(updates.includes("#rg-modals"), "select changes must update an already open modal");
   updates.length = 0;

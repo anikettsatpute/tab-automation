@@ -5,7 +5,7 @@ export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 export const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export const S = {
-  view: "board", detailTab: "overview", sel: null, detail: null, fromTab: null,
+  view: "board", detailTab: "overview", sel: null, detail: null, fromTab: null, routeInit: false,
   kindFilter: "all", lastOk: 0,
   cfg: { enabled: true, refreshSec: 3 },
   ov: null, tasks: [], agents: [], tools: [], activity: [], logs: [],
