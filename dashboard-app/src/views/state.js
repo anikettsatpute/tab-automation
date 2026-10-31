@@ -20,7 +20,7 @@ export const S = {
   brainSel: null, brainTab: "details", brainQ: "", brainLimit: 30, brainFocusReturn: null, flowSel: null,
   flowEdit: null, flowTrig: "schedule", flowTime: "11:00 AM", flowDays: ["Every day"], flowCron: "", flowRule: "",
   flowMsg: "", flowDryBusy: false, flowDryResult: null, cfgData: null, cfgMsg: "",
-  cfgTab: "providers", cfgDirty: false, cfgErr: false, cfgOpenAgent: null, pipeEdit: null, autoEdit: null,
+  cfgTab: "providers", cfgDirty: false, cfgErr: false, cfgOpenAgent: null, pipeEdit: null, dcBinds: null, cfgEnv: null,
   // OrchestratorLoop: tasks/counts/engine from /api/control/loop/*.
   loopTasks: [], loopCounts: {}, loopEngine: null, loopRequests: [], loopActivity: [],
   dispatchers: [], loopTypes: [], loopAgents: [], todoForm: false,

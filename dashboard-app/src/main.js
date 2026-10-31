@@ -137,7 +137,7 @@ function wireConfig() {
   if (S.view !== "config") return;
   const c = S.cfgData;
   const dirty = () => { if (!S.cfgDirty) { S.cfgDirty = true; render(); } };
-  $$("[data-cfgtab]").forEach((b) => (b.onclick = () => { S.cfgTab = b.dataset.cfgtab; render(); }));
+  $$("[data-cfgtab]").forEach((b) => (b.onclick = () => { S.cfgTab = b.dataset.cfgtab; if (S.cfgTab === "secrets") S.cfgEnv = null; render(); }));
   for (const id of ["#cfgsave", "#cfgsave2", "#cfgsave3"]) { const b = $(id); if (b) b.onclick = saveCfg; }
   // providers
   $$("[data-pi]").forEach((el) => (el.onchange = () => {
@@ -204,31 +204,47 @@ function wireConfig() {
       cfgNotice(`Pipeline ${id} started — watch it on the Board.`); tick(true);
     } catch (e) { cfgNotice(`Run failed: ${e.message}`, true); }
   }));
-  // automation builder
-  const abn = $("#ab-new"); if (abn) abn.onclick = () => { S.autoEdit = { id: "", title: "", description: "", trigger: "discord", command: "", steps: [{ id: "s1", agent: firstAgent(), prompt: "{{trigger.text}}" }] }; render(); };
-  const ab = S.autoEdit;
-  if (ab) {
-    for (const [sel, k] of [["#ab-id", "id"], ["#ab-title", "title"], ["#ab-desc", "description"], ["#ab-cmd", "command"]]) { const el = $(sel); if (el) el.oninput = () => { ab[k] = el.value.trim(); }; }
-    const tr = $("#ab-trig"); if (tr) tr.onchange = () => { ab.trigger = tr.value; render(); };
-    $$("[data-abs]").forEach((el) => (el.oninput = el.onchange = () => { const s = ab.steps[+el.dataset.abs]; if (s) s[el.dataset.abf] = el.value; }));
-    $$("[data-absdel]").forEach((b) => (b.onclick = () => { ab.steps.splice(+b.dataset.absdel, 1); render(); }));
-    const add = $("#ab-addstep"); if (add) add.onclick = () => { const prev = ab.steps[ab.steps.length - 1]; const n = ab.steps.length + 1; ab.steps.push({ id: `s${n}`, agent: firstAgent(), prompt: prev ? `{{steps.${prev.id}}}` : "{{trigger.text}}" }); render(); };
-    const cn = $("#ab-cancel"); if (cn) cn.onclick = () => { S.autoEdit = null; render(); };
-    const sv = $("#ab-save"); if (sv) sv.onclick = async () => {
-      if (!ab.id || !ab.steps.length) { cfgNotice("Automation needs an id and at least one step.", true); return; }
-      const body = {
-        id: ab.id, title: ab.title || ab.id, description: ab.description, trigger_type: ab.trigger,
-        trigger_config: ab.trigger === "discord" ? { command: ab.command } : {},
-        steps: ab.steps.map((s) => ({ id: s.id, type: "agent", agent: s.agent, prompt: s.prompt || "{{trigger.text}}", title: `${s.agent}` })),
-      };
-      try {
-        await api("/api/control/automations", { method: "POST", body: JSON.stringify(body) });
-        S.autoEdit = null;
-        cfgNotice(ab.trigger === "discord" ? `Saved — type !${ab.command} <text> in Discord.` : "Automation saved.");
-        tick(true);
-      } catch (e) { cfgNotice(`Automation save failed: ${e.message}`, true); }
-    };
+  // discord command bindings (edited locally in S.dcBinds until saved)
+  const binds = () => (S.dcBinds ??= JSON.parse(JSON.stringify(c?.discord?.commands || [])));
+  $$("[data-bi]").forEach((el) => (el.onchange = () => {
+    const b = binds()[+el.dataset.bi]; if (!b) return;
+    b[el.dataset.bf] = el.value.trim().replace(/^!/, "").toLowerCase();
+    if (el.dataset.bf === "kind") { b.target = ""; render(); }
+  }));
+  $$("[data-bdel]").forEach((b) => (b.onclick = () => { binds().splice(+b.dataset.bdel, 1); render(); }));
+  const ab = $("#dc-addbind"); if (ab) ab.onclick = () => { binds().push({ command: "", kind: "automation", target: "" }); render(); };
+  const sb = $("#dc-savebind"); if (sb) sb.onclick = async () => {
+    const d = c?.discord || {};
+    const body = { mainChannelId: d.mainChannelId, guildId: d.guildId, ownerUserId: d.ownerUserId, extraChannels: d.extraChannels || [], commands: binds() };
+    try {
+      const r = await api("/api/control/config/discord", { method: "POST", body: JSON.stringify(body) });
+      if (r.discord) S.cfgData.discord = r.discord;
+      S.dcBinds = null;
+      cfgNotice("Command bindings saved — live in Discord now.");
+    } catch (e) { cfgNotice(`Bindings save failed: ${e.message}`, true); }
+  };
+  // secrets (.env) — values are write-only; inputs are cleared after save
+  if (S.cfgTab === "secrets" && !S.cfgEnv && !S.cfgEnvLoading) {
+    S.cfgEnvLoading = true;
+    api("/api/control/config/env").then((r) => { S.cfgEnv = r.keys || []; }).catch((e) => cfgNotice(`Secrets load failed: ${e.message}`, true)).finally(() => { S.cfgEnvLoading = false; render(); });
   }
+  const postEnv = async (body, okMsg) => {
+    try {
+      const r = await api("/api/control/config/env", { method: "POST", body: JSON.stringify(body) });
+      S.cfgEnv = r.keys || S.cfgEnv;
+      cfgNotice(`${okMsg}${r.restartRequired?.length ? ` Restart the bot to apply ${r.restartRequired.join(", ")}.` : ""}`);
+    } catch (e) { cfgNotice(`Secrets save failed: ${e.message}`, true); }
+  };
+  const es = $("#env-save"); if (es) es.onclick = () => {
+    const set = {};
+    $$("[data-env]").forEach((el) => { if (el.value.trim()) set[el.dataset.env] = el.value.trim(); el.value = ""; });
+    if (!Object.keys(set).length) { cfgNotice("Nothing to save — type a new value first.", true); return; }
+    postEnv({ set }, `Saved ${Object.keys(set).join(", ")}.`);
+  };
+  $$("[data-envclear]").forEach((b) => (b.onclick = () => {
+    if (!confirm(`Remove ${b.dataset.envclear} from .env?`)) return;
+    postEnv({ clear: [b.dataset.envclear] }, `Cleared ${b.dataset.envclear}.`);
+  }));
 }
 
 function wireOnly() {

@@ -182,9 +182,10 @@ export function registerTaskRoutes(app, ctx) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
-  app.get("/api/control/retro", (c) => {
+  app.get("/api/control/retro", async (c) => {
     try {
       const days = Math.min(Number(c.req.query("days")) || 30, 90);
+      try { (await import("../loop/reconcile.js")).backfillTaskUsage(root); } catch { /* best effort */ }
       return c.json({ ok: true, ...controlRetro(root, { days }) });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });

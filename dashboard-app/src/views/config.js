@@ -1,5 +1,5 @@
 // Configuration: sectioned editor for providers & models, Discord routing,
-// agents, agent pipelines (loop task types) and Discord/manual automations.
+// agents, agent pipelines (loop task types) and .env secrets.
 // Pure render — wiring lives in main.js (wireConfig).
 import { S, esc } from "./state.js";
 import { pageHead, section, emptyState, icon } from "./ui.js";
@@ -11,7 +11,7 @@ export const CFG_TABS = [
   ["discord", "Discord", "message-circle"],
   ["agents", "Agents", "bot"],
   ["pipelines", "Pipelines", "git-branch"],
-  ["automations", "Automations", "workflow"],
+  ["secrets", "Secrets (.env)", "key-round"],
 ];
 const BUILTIN_CMDS = ["!remember <text>", "!recall <q>", "!todo <text>", "!todos", "!history", "!automations", "!pipelines", "!pipeline <id> <goal>"];
 
@@ -64,10 +64,12 @@ function discordTab(c) {
   ${fld("Extra channels (comma separated IDs)", `<input id="dc-extra" value="${esc((d.extraChannels || []).join(", "))}">`)}
   ${Object.values(d.envOverrides || {}).some(Boolean) ? `<p class="hint">${icon("info")} Some values are overridden by env vars (${Object.entries(d.envOverrides).filter(([, v]) => v).map(([k]) => esc(k)).join(", ")}); the env value wins at runtime.</p>` : ""}
   <div class="row"><span class="hint">Effective post channel: <span class="kbd">${esc(d.effective?.channelId || "—")}</span></span><span class="spacer"></span><button type="button" class="btn sm primary" id="dc-save">${icon("save")} Save Discord</button></div>`)
+  + bindingsSection(d)
   + section("Discord commands", `
   <p class="hint">Type these in any channel the bot can read.</p>
   <div class="tblwrap"><table class="tbl"><thead><tr><th>Command</th><th>Runs</th><th>Kind</th></tr></thead><tbody>
   ${flows.map((f) => `<tr><td><span class="kbd">!${esc(f.trigger.command)} &lt;text&gt;</span></td><td>${esc(f.title || f.id)}<br><span class="hint">${esc(f.description || "")}</span></td><td>automation</td></tr>`).join("")}
+  ${(d.commands || []).map((b) => `<tr><td><span class="kbd">!${esc(b.command)} &lt;text&gt;</span></td><td>${esc(b.target)}</td><td>${esc(b.kind)} (binding)</td></tr>`).join("")}
   ${(S.loopTypes || []).map((t) => `<tr><td><span class="kbd">!pipeline ${esc(t.id)} &lt;goal&gt;</span></td><td>${esc(t.name)}<br><span class="hint">${(t.steps || []).map((s) => esc(s.role)).join(" → ")}</span></td><td>pipeline</td></tr>`).join("")}
   <tr><td colspan="3" class="hint">Built-ins: ${BUILTIN_CMDS.map((b) => `<span class="kbd">${esc(b)}</span>`).join(" ")} · or just @mention the bot.</td></tr>
   </tbody></table></div>`);
@@ -133,41 +135,46 @@ function pipelinesTab() {
   </div>`).join("") || emptyState("git-branch", "No pipelines", "Create one above.")}`);
 }
 
-function automationsTab() {
-  const ab = S.autoEdit;
-  const agents = (S.cfgData?.agents?.agents || []).filter((a) => !a._new).map((a) => a.id);
-  const mine = (S.flows || []).filter((f) => ["discord", "manual"].includes(f.trigger?.type || f.trigger));
-  return section("Automation builder", `
-  <p class="hint">Chain agents behind a Discord command (or a Run button). Step prompts can use <span class="kbd">{{trigger.text}}</span> (what the user typed after the command) and <span class="kbd">{{steps.&lt;id&gt;}}</span> (an earlier step's output). The last step's output is posted back to the channel.</p>
-  ${ab ? `<div class="appr" role="group" aria-label="Automation editor">
-    <div class="row">${fld("ID", `<input id="ab-id" value="${esc(ab.id)}" placeholder="haiku">`)}${fld("Title", `<input id="ab-title" value="${esc(ab.title)}">`, "grow")}</div>
-    ${fld("Description", `<input id="ab-desc" value="${esc(ab.description)}">`)}
-    <div class="row">${fld("Trigger", `<select id="ab-trig">${opt("discord", ab.trigger, "Discord command")}${opt("manual", ab.trigger, "Manual (Run button)")}</select>`)}
-    ${ab.trigger === "discord" ? fld("Command (without !)", `<input id="ab-cmd" value="${esc(ab.command)}" placeholder="haiku">`) : ""}</div>
-    <h4>Agent steps</h4>
-    ${ab.steps.map((s, i) => `<div class="stepcard"><div class="row"><span class="kbd">${esc(s.id)}</span>
-      ${fld("Agent", `<select data-abs="${i}" data-abf="agent">${agents.map((a) => opt(a, s.agent)).join("")}</select>`)}<span class="spacer"></span>
-      <button type="button" class="btn sm danger" data-absdel="${i}" aria-label="Remove step ${i + 1}">${icon("trash-2")}</button></div>
-      ${fld("Prompt", `<textarea data-abs="${i}" data-abf="prompt" rows="2" placeholder="${i === 0 ? "{{trigger.text}}" : `Improve this:\n{{steps.${esc(ab.steps[i - 1]?.id || "s1")}}}`}">${esc(s.prompt)}</textarea>`)}</div>`).join("")}
-    <div class="row"><button type="button" class="btn sm ghost" id="ab-addstep">${icon("plus")} Add agent step</button><span class="spacer"></span>
-      <button type="button" class="btn sm ghost" id="ab-cancel">Cancel</button><button type="button" class="btn sm primary" id="ab-save">${icon("save")} Save automation</button></div>
-  </div>` : `<div class="row"><button type="button" class="btn sm" id="ab-new">${icon("plus")} New automation</button></div>`}`)
-  + section(`Discord & manual automations (${mine.length})`, mine.map((f) => `<div class="appr"><div class="row"><b>${icon("workflow")} ${esc(f.title || f.id)}</b>
-    ${f.trigger?.command ? `<span class="kbd">!${esc(f.trigger.command)}</span>` : `<span class="kbd">manual</span>`}<span class="spacer"></span>
-    <button type="button" class="btn sm primary" data-runflow="${esc(f.id)}">${icon("play")} Run</button>
-    <button type="button" class="btn sm danger" data-flowdel="${esc(f.id)}" aria-label="Delete automation ${esc(f.id)}">${icon("trash-2")}</button></div>
-    <p class="hint">${esc(f.description || "")}</p>
-    <div class="pipe">${(f.steps || []).map((s, i) => `<div class="pnode"><b>${esc(s.agent || s.id)}</b><span>${esc(s.type)}</span></div>${i < f.steps.length - 1 ? `<span class="arr">→</span>` : ""}`).join("")}</div></div>`).join("")
-    || emptyState("workflow", "No automations", "Build one above."), `<span class="hint">schedules live in Automations</span>`);
+/** Command → automation | pipeline bindings (config/discord.json "commands"). */
+function bindingsSection(d) {
+  const binds = S.dcBinds ?? d.commands ?? [];
+  const autos = (S.flows || []).map((f) => f.id);
+  const pipes = (S.loopTypes || []).map((t) => t.id);
+  return section(`Command bindings (${binds.length})`, `
+  <p class="hint">Bind your own <span class="kbd">!command</span> to an existing automation or pipeline — no restart. The text after the command becomes <span class="kbd">{{trigger.text}}</span> (automation) or the goal (pipeline). Build the automations themselves in <b>Automations</b>.</p>
+  ${binds.map((b, i) => `<div class="row">
+    ${fld("Command (no !)", `<input data-bi="${i}" data-bf="command" value="${esc(b.command || "")}" placeholder="ship" maxlength="24">`)}
+    ${fld("Runs", `<select data-bi="${i}" data-bf="kind">${opt("automation", b.kind, "Automation")}${opt("pipeline", b.kind, "Pipeline")}</select>`)}
+    ${fld("Target", `<select data-bi="${i}" data-bf="target">${opt("", b.target || "", "— pick —")}${(b.kind === "pipeline" ? pipes : autos).map((t) => opt(t, b.target)).join("")}</select>`, "grow")}
+    <button type="button" class="btn sm danger" data-bdel="${i}" aria-label="Remove binding ${i + 1}">${icon("trash-2")}</button></div>`).join("") || `<p class="hint">No custom bindings yet.</p>`}
+  <div class="row"><button type="button" class="btn sm" id="dc-addbind">${icon("plus")} Add binding</button><span class="spacer"></span>
+    <button type="button" class="btn sm primary" id="dc-savebind">${icon("save")} Save bindings</button></div>`);
+}
+
+function secretsTab() {
+  const keys = S.cfgEnv;
+  if (!keys) return section("Secrets (.env)", `<p class="hint" aria-busy="true">Loading…</p>`);
+  const groups = [["discord", "Discord"], ["providers", "Providers"], ["access", "Dashboard access"], ["runtime", "Runtime"]];
+  return section("Secrets (.env)", `
+  <p class="hint">${icon("shield-check")} Write-only. Secret values are never sent back to the browser — you only see whether they're set. Saved to <span class="kbd">.env</span> (mode 0600) and applied to the running process; the bot token and TZ need a restart. Leave a box empty to keep the current value.</p>
+  ${groups.map(([g, label]) => {
+    const rows = keys.filter((k) => k.group === g);
+    return rows.length ? `<h4>${esc(label)}</h4>${rows.map((k) => `<div class="row">
+      ${fld(k.name, `<input data-env="${esc(k.name)}" type="${k.secret ? "password" : "text"}" autocomplete="off" spellcheck="false" placeholder="${k.secret ? (k.set ? "•••••• (set — type to replace)" : "not set") : esc(k.value || "not set")}">`, "grow")}
+      <span class="tag ${k.set ? "ok" : "bad"}">${k.set ? "set" : "unset"}</span>${k.source ? `<span class="hint">${esc(k.source)}</span>` : ""}
+      <button type="button" class="btn sm ghost" data-envclear="${esc(k.name)}" ${k.set && k.source === ".env" ? "" : "disabled"} aria-label="Clear ${esc(k.name)}">${icon("x")} Clear</button></div>
+      <p class="hint">${esc(k.hint || "")}</p>`).join("")}` : "";
+  }).join("")}
+  <div class="row"><span class="spacer"></span><button type="button" class="btn sm primary" id="env-save">${icon("save")} Save secrets</button></div>`);
 }
 
 export function configView() {
   const c = S.cfgData;
   if (!c) return `<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;
   const tab = CFG_TABS.some(([v]) => v === S.cfgTab) ? S.cfgTab : "providers";
-  const body = tab === "discord" ? discordTab(c) : tab === "agents" ? agentsTab(c) : tab === "pipelines" ? pipelinesTab() : tab === "automations" ? automationsTab() : providersTab(c);
+  const body = tab === "discord" ? discordTab(c) : tab === "agents" ? agentsTab(c) : tab === "pipelines" ? pipelinesTab() : tab === "secrets" ? secretsTab() : providersTab(c);
   return `
-  ${pageHead("Configuration", "providers · discord · agents · pipelines · automations", S.cfgDirty ? `<span class="tag warn">unsaved changes</span><button type="button" class="btn sm primary" id="cfgsave">${icon("save")} Save</button>` : "")}
+  ${pageHead("Configuration", "providers · discord · agents · pipelines · secrets", S.cfgDirty ? `<span class="tag warn">unsaved changes</span><button type="button" class="btn sm primary" id="cfgsave">${icon("save")} Save</button>` : "")}
   ${S.cfgMsg ? `<div class="notice ${S.cfgErr ? "bad" : "ok"}" role="status">${icon(S.cfgErr ? "alert-triangle" : "check-circle-2")} ${esc(S.cfgMsg)}</div>` : ""}
   ${tabBar()}
   ${body}`;

@@ -92,11 +92,14 @@ export function retroView() {
   return `
   ${pageHead("Retro", `last ${esc(String(r.since || "").slice(0, 10))} → now`)}
   ${statRow([
-    { icon: "layers", label: "Total runs", value: r.runs?.c ?? 0 },
-    { icon: "timer", label: "Avg duration", value: `${Math.round(r.runs?.avgSec || 0)}s` },
-    { icon: "coins", label: "Tokens", value: Number(r.runs?.t || 0).toLocaleString() },
-    { icon: "wrench", label: "Tool calls", value: r.runs?.tc ?? 0 },
+    { icon: "layers", label: "Total runs", value: (r.total || r.runs)?.c ?? 0 },
+    { icon: "timer", label: "Avg duration", value: `${Math.round((r.total || r.runs)?.avgSec || 0)}s` },
+    { icon: "coins", label: "Tokens", value: Number((r.total || r.runs)?.t || 0).toLocaleString() },
+    { icon: "wrench", label: "Tool calls", value: (r.total || r.runs)?.tc ?? 0 },
   ])}
+  ${r.pipelines ? section("By source", `<table class="tbl"><thead><tr><th>Source</th><th>Runs</th><th>Tokens</th><th>Tool calls</th><th>Avg</th></tr></thead><tbody>
+    ${[["Automations", r.automations], ["Agent pipelines", r.pipelines]].map(([l, x]) => `<tr><td>${l}</td><td>${x?.c ?? 0}</td><td>${Number(x?.t || 0).toLocaleString()}</td><td>${x?.tc ?? 0}</td><td>${Math.round(x?.avgSec || 0)}s</td></tr>`).join("")}
+  </tbody></table><p class="hint">Pipeline tokens come from the Muse CLI usage stream (Copilot CLI reports premium requests, not tokens). Automation tokens and tool calls are agent self-reports and undercount.</p>`) : ""}
   ${section("Runs by status", byStatus.length ? `<div class="mrow">${byStatus.map((s) => `<span class="m ${s.tone}">${icon(s.icon)} ${esc(s.label)} <b>${s.value}</b></span>`).join("")}</div>` : `<p class="hint">—</p>`)}
   ${section("Delivery velocity", `<div class="chartbox"><canvas id="retro-chart" height="120"></canvas></div>`, `<span class="hint">${(r.byDay || []).length} days</span>`)}
   ${section("Retries", (r.retries || []).length ? (r.retries || []).map((s) => `<div class="arow"><span>${esc(s.workflow_id)}</span><b>${s.c}</b></div>`).join("") : `<p class="hint">No repeats — deterministic.</p>`)}`;

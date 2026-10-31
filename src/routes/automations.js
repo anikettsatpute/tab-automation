@@ -4,6 +4,7 @@ import {
   setAutomationEnabled, markAutomationRun, dismissTodo, getTodo, fileRequest,
 } from "../db.js";
 import { loadJson } from "../setup-api.js";
+import { BUILTIN_COMMANDS, COMMAND_RE, findCommandBinding } from "../discord-commands.js";
 
 export function registerAutomationRoutes(app, ctx) {
   const { root, cfg, log } = ctx;
@@ -49,9 +50,10 @@ export function registerAutomationRoutes(app, ctx) {
       const ttype = b.trigger?.type || b.trigger_type || "manual";
       if (ttype === "discord") {
         const cmd = String(b.trigger?.command || b.trigger_config?.command || "");
-        if (!/^[a-z][a-z0-9_-]{0,23}$/.test(cmd)) return c.json({ error: "discord trigger needs a command like 'haiku' (lowercase, no '!')" }, 400);
-        const BUILTIN = ["remember", "recall", "memory", "history", "run", "todo", "todos", "done", "digest", "remind", "reminders", "automations", "workflows", "list", "pipelines", "pipeline"];
-        if (BUILTIN.includes(cmd)) return c.json({ error: `!${cmd} is a built-in command` }, 400);
+        if (!COMMAND_RE.test(cmd)) return c.json({ error: "discord trigger needs a command like 'haiku' (lowercase, no '!')" }, 400);
+        if (BUILTIN_COMMANDS.includes(cmd)) return c.json({ error: `!${cmd} is a built-in command` }, 400);
+        const bound = findCommandBinding({ root }, cmd);
+        if (bound) return c.json({ error: `!${cmd} is already bound to ${bound.kind} ${bound.target} (Configuration → Discord)` }, 409);
         const id = b.id || b.title || b.name;
         const clash = listAutomations(root).find((a) => a.id !== id && a.trigger_type === "discord" && a.trigger_config?.command === cmd);
         if (clash) return c.json({ error: `!${cmd} is already used by ${clash.id}` }, 409);

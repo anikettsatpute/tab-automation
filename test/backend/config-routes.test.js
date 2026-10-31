@@ -129,3 +129,84 @@ test("automation builder: command validation + discord lookup", async () => {
   assert.equal(wf.steps[0].agent, "writer");
   assert.equal(findDiscordAutomation(cfg, "nope"), null);
 });
+
+test("discord command bindings: validated, saved, resolved live", async () => {
+  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
+  const post = (commands) => req(app, "/api/control/config/discord", { method: "POST", body: { mainChannelId: "111111", commands } });
+  assert.equal((await post([{ command: "todo", kind: "pipeline", target: "t1" }])).status, 400, "built-in");
+  assert.equal((await post([{ command: "ship", kind: "pipeline", target: "ghost" }])).status, 400, "unknown pipeline");
+  assert.equal((await post([{ command: "ship", kind: "pipeline", target: "t1" }, { command: "ship", kind: "pipeline", target: "t1" }])).status, 400, "duplicate");
+  const ok = await json(await post([{ command: "ship", kind: "pipeline", target: "t1" }]));
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.deepEqual(ok.data.discord.commands, [{ command: "ship", kind: "pipeline", target: "t1" }]);
+  const { findCommandBinding } = await import("../../src/discord.js");
+  assert.equal(findCommandBinding(cfg, "ship").target, "t1");
+  // An automation trigger cannot steal a bound command.
+  const auto = { id: "x", title: "X", trigger_type: "discord", trigger_config: { command: "ship" }, steps: [{ id: "s1", type: "agent", agent: "writer" }] };
+  assert.equal((await req(app, "/api/control/automations", { method: "POST", body: auto })).status, 409);
+  // Saving routing ids without `commands` keeps existing bindings.
+  await req(app, "/api/control/config/discord", { method: "POST", body: { mainChannelId: "222222" } });
+  assert.equal(readJson("config/discord.json").commands.length, 1);
+});
+
+test(".env editor: allowlisted, write-only, atomic 0600, hot-applied, audited by name", async () => {
+  const { statSync } = await import("node:fs");
+  writeFileSync(join(root, ".env"), "# keep me\nDISCORD_BOT_TOKEN=old-token-value\nOTHER=1\n");
+  process.env.DISCORD_BOT_TOKEN = "old-token-value";
+  cfg.providers = [{ id: "or", keyEnv: "OR_KEY" }];
+  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
+  const got = await json(await req(app, "/api/control/config/env"));
+  assert.equal(got.status, 200);
+  assert.ok(!JSON.stringify(got.data).includes("old-token-value"), "secret never returned");
+  const tok = got.data.keys.find((k) => k.name === "DISCORD_BOT_TOKEN");
+  assert.equal(tok.set, true); assert.equal(tok.source, ".env"); assert.equal(tok.value, undefined);
+  assert.ok(got.data.keys.some((k) => k.name === "OR_KEY" && k.secret), "provider keyEnv is editable");
+
+  const post = (body) => req(app, "/api/control/config/env", { method: "POST", body });
+  assert.equal((await post({ set: { PATH: "/evil" } })).status, 400, "not allowlisted");
+  assert.equal((await post({ set: { OR_KEY: "a\nINJECT=1" } })).status, 400, "no newlines");
+  assert.equal((await post({ set: { OR_KEY: "it's" } })).status, 400, "no quotes");
+  const ok = await json(await post({ set: { DISCORD_BOT_TOKEN: "new-token-value", OR_KEY: "sk or #x", DISCORD_CHANNEL_ID: "999999" } }));
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.deepEqual(ok.data.restartRequired, ["DISCORD_BOT_TOKEN"]);
+  assert.ok(!JSON.stringify(ok.data).includes("new-token-value") && !JSON.stringify(ok.data).includes("sk or"), "response has no secrets");
+  const text = readFileSync(join(root, ".env"), "utf8");
+  assert.match(text, /^# keep me$/m); assert.match(text, /^OTHER=1$/m);
+  assert.match(text, /^DISCORD_BOT_TOKEN=new-token-value$/m);
+  assert.match(text, /^OR_KEY='sk or #x'$/m);
+  assert.equal(statSync(join(root, ".env")).mode & 0o777, 0o600);
+  assert.equal(process.env.OR_KEY, "sk or #x");
+  assert.equal(cfg.discord.channelId, "999999", "hot-applied");
+  const { parse } = await import("dotenv");
+  assert.equal(parse(text).OR_KEY, "sk or #x", "dotenv reads it back verbatim");
+  const cl = await json(await post({ clear: ["OR_KEY", "DISCORD_CHANNEL_ID"] }));
+  assert.equal(cl.status, 200);
+  assert.ok(!readFileSync(join(root, ".env"), "utf8").includes("OR_KEY"));
+  assert.equal(process.env.OR_KEY, undefined);
+  const { openDb } = await import("../../src/db.js");
+  const audits = openDb(root).prepare("SELECT detail FROM audit_log WHERE action = 'config.env'").all().map((r) => r.detail).join("|");
+  assert.match(audits, /\+DISCORD_BOT_TOKEN/);
+  assert.ok(!audits.includes("new-token-value"));
+  delete process.env.DISCORD_BOT_TOKEN;
+});
+
+test("retro counts agent pipelines and backfills tokens from transcripts", async () => {
+  const store = await import("../../src/loop/store.js");
+  const { backfillTaskUsage } = await import("../../src/loop/reconcile.js");
+  const { controlRetro } = await import("../../src/db.js");
+  const tid = store.createTask(root, { title: "t", steps: [{ role: "writer", goal: "g" }] });
+  const dir = join(root, "data", "tasks", `task-${tid}`, "steps", "01-writer");
+  mkdirSync(dir, { recursive: true });
+  const tp = join(dir, "transcript.a1.jsonl");
+  writeFileSync(tp, JSON.stringify({ payload_type: "run.usage", payload: { calls: 3, models: [{ input_tokens: 1000, output_tokens: 234, cached_tokens: 0 }] } }) + "\n");
+  store.createAttempt(root, { taskId: tid, pos: 0, attempt: 1, role: "writer", transcriptPath: tp });
+  store.updateTask(root, tid, { status: "done", tool_calls: 5, finished_at: new Date().toISOString() });
+  assert.equal(backfillTaskUsage(root), 1);
+  assert.equal(backfillTaskUsage(root), 0, "idempotent");
+  const r = controlRetro(root, { days: 7 });
+  assert.equal(r.pipelines.c, 1);
+  assert.equal(r.pipelines.t, 1234);
+  assert.equal(r.total.tc, 5);
+  assert.ok(r.byStatus.some((s) => s.status === "done" && s.c === 1));
+  assert.equal(r.runs.c, r.total.c, "legacy key is the combined view");
+});

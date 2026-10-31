@@ -13,6 +13,28 @@ const ajv = new Ajv({ allErrors: true, strict: false });
 const validateResult = ajv.compile(require("../../schemas/step-result.schema.json"));
 const validateDivider = ajv.compile(require("../../schemas/divider.schema.json"));
 
+/** Backfill loop_tasks.tokens from CLI transcript usage for finished tasks
+ *  that recorded 0 (pre-fcae84a runs, or agents that self-reported nothing).
+ *  Idempotent: only touches tasks still at 0. Returns number of tasks fixed. */
+export function backfillTaskUsage(root) {
+  const d = store.db(root);
+  const tasks = d.prepare("SELECT id FROM loop_tasks WHERE tokens = 0 AND status IN ('done','failed','blocked','cancelled')").all();
+  let fixed = 0;
+  for (const t of tasks) {
+    let sum = 0;
+    for (const a of d.prepare("SELECT transcript_path FROM loop_attempts WHERE task_id = ?").all(t.id)) {
+      const f = a.transcript_path;
+      if (!f || !isInside(taskDir(root, t.id), f) || !existsSync(f)) continue;
+      try {
+        const u = parseTranscript(readFileSync(f, "utf8")).meta?.usage;
+        sum += (Number(u?.input) || 0) + (Number(u?.output) || 0);
+      } catch { /* unreadable transcript */ }
+    }
+    if (sum > 0) { store.updateTask(root, t.id, { tokens: sum }); fixed++; }
+  }
+  return fixed;
+}
+
 /** First complete top-level JSON object in text (tolerates fences, prose, duplicates). */
 export function extractJson(text) {
   const s = String(text ?? "");

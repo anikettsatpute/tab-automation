@@ -885,7 +885,38 @@ export function controlRetro(root, { days = 30 } = {}) {
     "SELECT workflow_id, COUNT(*) c FROM runs WHERE started_at >= ? GROUP BY workflow_id HAVING c > 1 ORDER BY c DESC LIMIT 10"
   ).all(since);
   const byDay = db.prepare("SELECT substr(started_at,1,10) d, COUNT(*) c FROM runs WHERE started_at >= ? GROUP BY d ORDER BY d").all(since);
-  return { since, runs, byStatus, retries, byDay };
+  // Agent pipelines (OrchestratorLoop) live in loop_tasks; the table only
+  // exists once the loop store has been opened, so absence means zero.
+  let pipelines = { c: 0, t: 0, tc: 0, avgSec: 0 }, pStatus = [], pDay = [], pRetries = [];
+  try {
+    pipelines = db.prepare(
+      "SELECT COUNT(*) c, COALESCE(SUM(tokens),0) t, COALESCE(SUM(tool_calls),0) tc, " +
+      "COALESCE(AVG(CASE WHEN finished_at IS NOT NULL AND finished_at != '' THEN (julianday(finished_at)-julianday(created_at))*86400 ELSE NULL END),0) avgSec " +
+      "FROM loop_tasks WHERE created_at >= ?"
+    ).get(since);
+    pStatus = db.prepare("SELECT status, COUNT(*) c FROM loop_tasks WHERE created_at >= ? GROUP BY status").all(since);
+    pDay = db.prepare("SELECT substr(created_at,1,10) d, COUNT(*) c FROM loop_tasks WHERE created_at >= ? GROUP BY d ORDER BY d").all(since);
+    pRetries = db.prepare("SELECT COALESCE(NULLIF(task_type,''),'(divided)') workflow_id, SUM(requeue_count) c FROM loop_tasks WHERE created_at >= ? GROUP BY workflow_id HAVING c > 0").all(since);
+  } catch { /* loop store not initialised */ }
+  const merge = (a, b, k) => {
+    const m = new Map();
+    for (const r of [...a, ...b]) m.set(r[k], (m.get(r[k]) || 0) + Number(r.c || 0));
+    return [...m].map(([key, c]) => ({ [k]: key, c }));
+  };
+  const n = Number(runs.c) + Number(pipelines.c);
+  const total = {
+    c: n,
+    t: Number(runs.t) + Number(pipelines.t),
+    tc: Number(runs.tc) + Number(pipelines.tc),
+    avgSec: n ? (Number(runs.avgSec) * Number(runs.c) + Number(pipelines.avgSec) * Number(pipelines.c)) / n : 0,
+  };
+  return {
+    since, total, automations: runs, pipelines,
+    runs: total, // legacy key: now the combined view
+    byStatus: merge(byStatus, pStatus, "status"),
+    retries: [...retries, ...pRetries.map((r) => ({ workflow_id: `pipeline:${r.workflow_id}`, c: r.c }))],
+    byDay: merge(byDay, pDay, "d").sort((x, y) => String(x.d).localeCompare(String(y.d))),
+  };
 }
 
 // ---- task actions (reference: PRD 4.4 drawer toolbar + 4.3 status badges) ----
