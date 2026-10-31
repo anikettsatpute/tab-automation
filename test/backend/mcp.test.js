@@ -207,6 +207,85 @@ test("routes: add, secrets (write-only), grant, test, delete", async () => {
   assert.equal(readTools(root).mcpNextNum, 3, "num not reused");
 });
 
+test("dashboard sign-in: Google preset for stdio gmail-mcp, callback, sign-out", async () => {
+  const doc = readTools(root);
+  doc.servers.push({ id: "gmail", transport: "stdio", command: "npx", args: ["-y", "gmail-mcp"] });
+  writeFileSync(join(root, "config", "tools.json"), JSON.stringify(doc));
+  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
+  let r = await call(app, "/api/control/mcp");
+  let g = r.data.servers.find((x) => x.id === "gmail");
+  assert.equal(g.signIn.kind, "provider");
+  assert.equal(g.signIn.provider, "google");
+  assert.equal(g.signIn.tokenEnv, "GOOGLE_ACCESS_TOKEN");
+
+  r = await call(app, "/api/control/mcp/gmail/oauth/start", { method: "POST", body: {} });
+  assert.equal(r.status, 400);
+  assert.equal(r.data.error, "NEED_CLIENT");
+
+  r = await call(app, "/api/control/mcp/gmail/oauth/start", { method: "POST", body: { clientId: "cid.apps.googleusercontent.com", clientSecret: "csec" } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const u = new URL(r.data.authorizeUrl);
+  assert.equal(u.origin + u.pathname, "https://accounts.google.com/o/oauth2/v2/auth");
+  assert.equal(u.searchParams.get("access_type"), "offline");
+  assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+  assert.match(u.searchParams.get("scope"), /gmail\.readonly/);
+  assert.equal(u.searchParams.get("redirect_uri"), `http://${LOCAL}/api/control/mcp/oauth/callback`);
+  assert.equal(process.env.MCP_3_CLIENT_ID, "cid.apps.googleusercontent.com");
+  const saved = readTools(root).servers.find((x) => x.id === "gmail");
+  assert.deepEqual(saved.env, { GOOGLE_ACCESS_TOKEN: "${MCP_3_ACCESS_TOKEN}" });
+  assert.equal(serverStatus(saved).status, "needs-auth");
+
+  const realFetch = globalThis.fetch;
+  let tokenReq;
+  globalThis.fetch = async (url, init) => {
+    tokenReq = { url: String(url), init };
+    return new Response(JSON.stringify({ access_token: "ya29.at", refresh_token: "1//rt", expires_in: 3600 }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const cb = await req(app, `/api/control/mcp/oauth/callback?code=abc&state=${encodeURIComponent(u.searchParams.get("state"))}`);
+    assert.equal(cb.status, 200, await cb.text());
+  } finally { globalThis.fetch = realFetch; }
+  assert.equal(tokenReq.url, "https://oauth2.googleapis.com/token");
+  assert.match(tokenReq.init.body, /code_verifier=/);
+  assert.equal(process.env.MCP_3_ACCESS_TOKEN, "ya29.at");
+  assert.equal(process.env.MCP_3_REFRESH_TOKEN, "1//rt");
+
+  r = await call(app, "/api/control/mcp");
+  g = r.data.servers.find((x) => x.id === "gmail");
+  assert.equal(g.status, "ready");
+  assert.equal(g.oauth.signedIn, true);
+  assert.ok(g.oauth.signedInAt);
+  assert.ok(!JSON.stringify(r.data).includes("ya29.at"), "token never returned");
+
+  cfg.agents.get("assistant").mcp = ["gmail"];
+  const inj = await mcpForAgent(cfg, "assistant");
+  assert.equal(inj.env.MCP_RUN_3_E_GOOGLE_ACCESS_TOKEN, "ya29.at");
+
+  const replay = await req(app, `/api/control/mcp/oauth/callback?code=abc&state=${encodeURIComponent(u.searchParams.get("state"))}`);
+  assert.equal(replay.status, 400, "state is single-use");
+
+  r = await call(app, "/api/control/mcp/gmail/oauth/signout", { method: "POST", body: {} });
+  assert.equal(r.status, 200);
+  assert.equal(process.env.MCP_3_ACCESS_TOKEN, undefined);
+  assert.equal(process.env.MCP_3_CLIENT_ID, "cid.apps.googleusercontent.com", "client kept for one-click re-sign-in");
+  assert.equal(r.data.servers.find((x) => x.id === "gmail").status, "needs-auth");
+});
+
+test("dashboard sign-in: custom endpoints must be https; tokenEnv must be safe", async () => {
+  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
+  let r = await call(app, "/api/control/mcp/fs/oauth/start", { method: "POST", body: { clientId: "c", authorizationEndpoint: "http://evil/auth", tokenEndpoint: "https://x/token", tokenEnv: "X_TOKEN" } });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /https/);
+  r = await call(app, "/api/control/mcp/fs/oauth/start", { method: "POST", body: { clientId: "c", authorizationEndpoint: "https://p/auth", tokenEndpoint: "https://p/token", tokenEnv: "DISCORD_BOT_TOKEN" } });
+  assert.equal(r.status, 400);
+  r = await call(app, "/api/control/mcp/fs/oauth/start", { method: "POST", body: { clientId: "c", authorizationEndpoint: "https://p/auth", tokenEndpoint: "https://p/token", tokenEnv: "FS_TOKEN", scope: "read" } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(r.data.authorizeUrl, /^https:\/\/p\/auth\?/);
+  const fs = readTools(root).servers.find((x) => x.id === "fs");
+  assert.deepEqual(fs.env, { FS_TOKEN: "${MCP_1_ACCESS_TOKEN}" });
+  assert.equal(fs.oauth.tokenEndpoint, "https://p/token");
+});
+
 test("routes: mutations need auth when a token is set", async () => {
   process.env.CONTROL_TOKEN = "t".repeat(32);
   const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });

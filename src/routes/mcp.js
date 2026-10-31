@@ -6,7 +6,7 @@ import { atomicWrite } from "../loop/workspace.js";
 import { writeEnv, validateEnvValue } from "../services/envfile.js";
 import {
   MCP_ID_RE, SLOT_RE, readTools, writeTools, listServers, publicServer, secretKey,
-  serverRefs, refAllowed, probeServer, saveTokens, ensureFreshToken,
+  serverRefs, refAllowed, probeServer, saveTokens, ensureFreshToken, signInInfo, OAUTH_PROVIDERS,
 } from "../services/mcp.js";
 
 const OAUTH_SLOTS = new Set(["ACCESS_TOKEN", "REFRESH_TOKEN", "EXPIRES_AT", "CLIENT_ID", "CLIENT_SECRET"]);
@@ -207,39 +207,85 @@ export function registerMcpRoutes(app, ctx) {
     } catch (e) { return c.json({ error: e.message }, 500); }
   });
 
-  // OAuth (HTTP servers): discover -> DCR or provided client -> PKCE authorize URL.
+  // OAuth sign-in from the dashboard. Three sources of endpoints:
+  //  discover: HTTP MCP server advertises OAuth (DCR when supported);
+  //  provider: known provider preset (e.g. Google for gmail-mcp);
+  //  custom:   endpoints typed in by the user.
+  // The token lands in .env as MCP_<num>_ACCESS_TOKEN and is wired into the
+  // server as a header (http) or env var (stdio, e.g. GOOGLE_ACCESS_TOKEN).
   app.post("/api/control/mcp/:id/oauth/start", async (c) => {
     const denied = await guard(c); if (denied) return denied;
     try {
       const { doc, s } = find(c.req.param("id"));
       if (!s) return c.json({ error: "unknown server" }, 404);
-      if (s.transport !== "http") return c.json({ error: "OAuth sign-in is for HTTP servers; stdio servers use secret slots" }, 400);
       const b = await c.req.json().catch(() => ({}));
-      const { discoverOAuth, dynamicRegister, pkcePair, newState, buildAuthorizeUrl } = await import("../oauth.js");
-      const d = await discoverOAuth(s.url);
-      if (!d.asMetadata?.authorization_endpoint || !d.asMetadata?.token_endpoint) return c.json({ error: "server does not advertise OAuth — use a secret slot (API key / PAT) instead" }, 400);
+      const info = signInInfo(s);
+      const { discoverOAuth, dynamicRegister, pkcePair, newState } = await import("../oauth.js");
       const redirectUri = `${baseUrl(c)}/api/control/mcp/oauth/callback`;
+      const scope = String(b.scope ?? info.scope ?? "").trim().slice(0, 1000);
       const env = (k) => String(process.env[secretKey(s.num, k)] || "").trim();
       let clientId = String(b.clientId || "").trim() || env("CLIENT_ID");
-      let clientSecret = String(b.clientSecret || "").trim() || env("CLIENT_SECRET");
-      if (b.clientId) { clientSecret = String(b.clientSecret || "").trim(); }
-      if (!clientId) {
-        if (!d.dcrSupported) return c.json({ error: "NEED_CLIENT", hint: `This provider needs an OAuth app. Create one with redirect URI ${redirectUri}, then paste its Client ID (and secret if any).`, redirectUri }, 400);
-        const reg = await dynamicRegister(d.asMetadata.registration_endpoint, { clientName: `tab-automation-${s.id}`, redirectUris: [redirectUri], scope: String(b.scope || "") });
-        clientId = reg.client_id; clientSecret = reg.client_secret || "";
+      let clientSecret = b.clientId ? String(b.clientSecret || "").trim() : env("CLIENT_SECRET");
+      let authEp, tokenEp, extra = {}, resource = "", mode = info.kind;
+
+      if (info.kind === "provider") {
+        const p = OAUTH_PROVIDERS[info.provider];
+        authEp = p.authorizationEndpoint; tokenEp = p.tokenEndpoint; extra = p.extraParams || {};
+      } else if (info.kind === "discover") {
+        const d = await discoverOAuth(s.url);
+        if (!d.asMetadata?.authorization_endpoint || !d.asMetadata?.token_endpoint) return c.json({ error: "server does not advertise OAuth — use a secret slot (API key / PAT) instead" }, 400);
+        authEp = d.asMetadata.authorization_endpoint; tokenEp = d.asMetadata.token_endpoint; resource = s.url;
+        if (!clientId && d.dcrSupported) {
+          const reg = await dynamicRegister(d.asMetadata.registration_endpoint, { clientName: `tab-automation-${s.id}`, redirectUris: [redirectUri], scope });
+          clientId = reg.client_id; clientSecret = reg.client_secret || ""; mode = "dcr";
+        }
+      } else {
+        authEp = String(b.authorizationEndpoint || s.oauth?.authorizationEndpoint || "").trim();
+        tokenEp = String(b.tokenEndpoint || s.oauth?.tokenEndpoint || "").trim();
+        for (const [n, u] of [["authorization", authEp], ["token", tokenEp]]) {
+          let parsed; try { parsed = new URL(u); } catch { return c.json({ error: `${n} endpoint must be a valid https URL` }, 400); }
+          if (parsed.protocol !== "https:") return c.json({ error: `${n} endpoint must be https` }, 400);
+        }
       }
+      if (!clientId) return c.json({ error: "NEED_CLIENT", hint: info.clientHint || `This provider needs an OAuth app. Create one with redirect URI ${redirectUri}, then paste its Client ID (and secret if any).`, redirectUri, helpUrl: info.helpUrl }, 400);
+
+      let tokenEnv = "";
+      if (s.transport !== "http") {
+        tokenEnv = String(b.tokenEnv || info.tokenEnv || "").trim();
+        if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(tokenEnv) || /^(MCP_|DISCORD_|AZURE_|CONTROL_|MUSE_)/.test(tokenEnv)) return c.json({ error: "tokenEnv: the env var name this server reads its access token from (e.g. GOOGLE_ACCESS_TOKEN)" }, 400);
+      }
+      for (const v of [clientId, clientSecret]) { const err = v && validateEnvValue(v); if (err) return c.json({ error: `client: ${err}` }, 400); }
       writeEnv(root, { [secretKey(s.num, "CLIENT_ID")]: clientId, [secretKey(s.num, "CLIENT_SECRET")]: clientSecret || null });
-      s.oauth = { authorizationEndpoint: d.asMetadata.authorization_endpoint, tokenEndpoint: d.asMetadata.token_endpoint, scope: String(b.scope || s.oauth?.scope || "") };
-      s.headers = { ...(s.headers || {}), Authorization: `Bearer \${${secretKey(s.num, "ACCESS_TOKEN")}}` };
+      s.oauth = { ...(info.provider ? { provider: info.provider } : {}), authorizationEndpoint: authEp, tokenEndpoint: tokenEp, scope, ...(tokenEnv ? { tokenEnv } : {}), signedInAt: s.oauth?.signedInAt || "" };
+      const ref = `\${${secretKey(s.num, "ACCESS_TOKEN")}}`;
+      if (s.transport === "http") s.headers = { ...(s.headers || {}), Authorization: `Bearer ${ref}` };
+      else s.env = { ...(s.env || {}), [tokenEnv]: ref };
       writeTools(root, doc);
+
       const { verifier, challenge } = pkcePair();
       const state = newState();
       for (const [k, v] of oauthSessions) if (Date.now() - v.at > 15 * 60000) oauthSessions.delete(k);
-      oauthSessions.set(state, { id: s.id, verifier, redirectUri, tokenEndpoint: s.oauth.tokenEndpoint, at: Date.now() });
-      const authorizeUrl = buildAuthorizeUrl(d.asMetadata, { clientId, redirectUri, scope: s.oauth.scope, state, codeChallenge: challenge, resource: s.url });
-      await audit(c, "mcp.oauth.start", s.id, d.dcrSupported && !b.clientId ? "dcr" : "client");
-      return c.json({ ok: true, authorizeUrl, redirectUri });
+      oauthSessions.set(state, { id: s.id, verifier, redirectUri, tokenEndpoint: tokenEp, at: Date.now() });
+      const u = new URL(authEp);
+      const params = { response_type: "code", client_id: clientId, redirect_uri: redirectUri, state, code_challenge: challenge, code_challenge_method: "S256", ...(scope ? { scope } : {}), ...(resource ? { resource } : {}), ...extra };
+      for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+      await audit(c, "mcp.oauth.start", s.id, mode);
+      return c.json({ ok: true, authorizeUrl: u.toString(), redirectUri });
     } catch (e) { return c.json({ error: String(e.message).slice(0, 300) }, 500); }
+  });
+
+  // Sign out: forget tokens (keeps the OAuth client so the next sign-in is one click).
+  app.post("/api/control/mcp/:id/oauth/signout", async (c) => {
+    const denied = await guard(c); if (denied) return denied;
+    try {
+      const { doc, s } = find(c.req.param("id"));
+      if (!s?.oauth) return c.json({ error: "not an OAuth server" }, 400);
+      writeEnv(root, Object.fromEntries(["ACCESS_TOKEN", "REFRESH_TOKEN", "EXPIRES_AT"].map((k) => [secretKey(s.num, k), null])));
+      s.oauth.signedInAt = ""; delete s.authStatus; s.authHint = "";
+      writeTools(root, doc);
+      await audit(c, "mcp.oauth.signout", s.id);
+      return c.json(view());
+    } catch (e) { return c.json({ error: e.message }, 500); }
   });
 
   // Provider redirects here (top-level GET: session cookie is SameSite=Lax, so it is sent).
@@ -259,6 +305,7 @@ export function registerMcpRoutes(app, ctx) {
       const t = await exchangeCode(sess.tokenEndpoint, { code: c.req.query("code"), redirectUri: sess.redirectUri, verifier: sess.verifier, clientId: env("CLIENT_ID"), clientSecret: env("CLIENT_SECRET") });
       saveTokens(root, s, t);
       s.authStatus = "ok"; s.authHint = "";
+      if (s.oauth) s.oauth.signedInAt = new Date().toISOString();
       writeTools(root, doc);
       await audit(c, "mcp.oauth.done", s.id, t.refresh_token ? "with refresh" : "no refresh");
       return page("Signed in", `${esc(s.name || s.id)} is connected. Token saved as <code>${secretKey(s.num, "ACCESS_TOKEN")}</code>${t.refresh_token ? " (auto-refresh on)" : ""}. You can close this tab.`);

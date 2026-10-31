@@ -158,6 +158,43 @@ function mcpForm(ed, nextNum) {
   </div>`;
 }
 
+const redirectUri = () => `${location.origin}/api/control/mcp/oauth/callback`;
+
+function signInBlock(s) {
+  const si = s.signIn || {};
+  const o = s.oauth;
+  const id = esc(s.id);
+  const waiting = S.mcpAuthWait === s.id;
+  const needClient = S.mcpNeedClient === s.id || (si.kind !== "discover" && !si.clientSet);
+  const what = si.kind === "provider" ? `Sign in with ${esc(si.label)}` : "Sign in";
+  const clientFields = `<div class="row">
+      ${fld("OAuth client ID", `<input id="mcp-cid-${id}" autocomplete="off" spellcheck="false" placeholder="${si.clientSet ? "saved — type to replace" : ""}">`, "grow")}
+      ${fld("Client secret", `<input id="mcp-csec-${id}" type="password" autocomplete="off" placeholder="${si.clientSet ? "saved — type to replace" : "if the app has one"}">`, "grow")}</div>
+    <p class="hint">${si.clientHint ? `${esc(si.clientHint)} ` : ""}Redirect URI: <span class="kbd">${esc(redirectUri())}</span>${si.helpUrl ? ` · <a href="${esc(si.helpUrl)}" target="_blank" rel="noopener noreferrer">open console</a>` : ""}</p>`;
+  const advanced = `
+    ${si.kind === "custom" ? `<div class="row">
+      ${fld("Authorization endpoint (https)", `<input id="mcp-authep-${id}" value="${esc(si.authorizationEndpoint)}" placeholder="https://provider.com/oauth/authorize">`, "grow")}
+      ${fld("Token endpoint (https)", `<input id="mcp-tokep-${id}" value="${esc(si.tokenEndpoint)}" placeholder="https://provider.com/oauth/token">`, "grow")}</div>` : ""}
+    <div class="row">${fld("Scopes (space separated)", `<input id="mcp-scope-${id}" value="${esc(si.scope)}">`, "grow")}
+      ${s.transport !== "http" ? fld("Server reads token from env var", `<input id="mcp-tokenv-${id}" value="${esc(si.tokenEnv)}" placeholder="GOOGLE_ACCESS_TOKEN">`) : ""}</div>`;
+  const status = o
+    ? `<span class="tag ${o.signedIn ? "ok" : "warn"}">${o.signedIn ? "signed in" : "not signed in"}</span>
+       ${o.signedIn && o.expiresAt ? `<span class="hint">token ${o.expiresAt > Date.now() ? "expires" : "expired"} ${esc(new Date(o.expiresAt).toLocaleString())}${o.canRefresh ? " · auto-refresh on" : ""}</span>` : ""}`
+    : `<span class="hint">${si.kind === "custom" ? "Optional: sign in with OAuth instead of pasting a token." : "Not connected."}</span>`;
+  const body = `
+    <div class="row">${icon("key-round")} <b>Sign-in</b> ${status}<span class="spacer"></span>
+      ${waiting ? `<span class="hint" aria-live="polite">${icon("loader")} Waiting for you to finish in the other tab…</span><button type="button" class="btn sm ghost" data-mcpauthcancel="${id}">Stop waiting</button>` : ""}
+      ${o?.canRefresh ? `<button type="button" class="btn sm ghost" data-mcprefresh="${id}">${icon("refresh-cw")} Refresh</button>` : ""}
+      ${o?.signedIn ? `<button type="button" class="btn sm ghost" data-mcpsignout="${id}">${icon("log-out")} Sign out</button>` : ""}
+      <button type="button" class="btn sm ${o?.signedIn ? "" : "primary"}" data-mcpauth="${id}" ${waiting ? "disabled" : ""}>${icon("key-round")} ${o?.signedIn ? "Sign in again" : what}</button></div>
+    ${needClient ? clientFields : ""}
+    <details><summary class="hint">Advanced${si.kind === "discover" && !needClient ? " (own OAuth app, scopes)" : " (scopes)"}</summary>
+      ${si.kind === "discover" && !needClient ? clientFields : ""}${advanced}</details>`;
+  if (si.kind === "custom" && !o) return `<details class="appr"><summary class="hint">${icon("key-round")} Set up OAuth sign-in (custom provider)</summary>${clientFields}${advanced}
+    <div class="row"><span class="spacer"></span><button type="button" class="btn sm" data-mcpauth="${id}">${icon("key-round")} Sign in</button></div></details>`;
+  return `<div class="appr" role="group" aria-label="Sign-in for ${id}">${body}</div>`;
+}
+
 function mcpTab() {
   const m = S.mcp;
   if (!m) return section("MCP servers", `<p class="hint" aria-busy="true">Loading…</p>`);
@@ -180,11 +217,7 @@ function mcpTab() {
       <span class="tag ${k.set ? "ok" : "bad"}">${k.set ? "set" : "unset"}</span>
       <button type="button" class="btn sm ghost" data-mcpclr="${esc(s.id)}" data-slot="${esc(k.slot)}" ${k.set ? "" : "disabled"} aria-label="Clear ${esc(k.key)}">${icon("x")} Clear</button></div>`).join("")}
     ${s.secrets.length ? `<div class="row"><span class="spacer"></span><button type="button" class="btn sm primary" data-mcpsave="${esc(s.id)}">${icon("save")} Save secrets</button></div>` : ""}
-    ${s.transport === "http" ? `<div class="row">${s.oauth ? `<span class="tag ${s.oauth.signedIn ? "ok" : "warn"}">${s.oauth.signedIn ? "signed in" : "not signed in"}</span>${s.oauth.expiresAt ? `<span class="hint">expires ${esc(new Date(s.oauth.expiresAt).toLocaleString())}</span>` : ""}` : ""}
-      ${fld("OAuth client ID (only if the provider has no dynamic registration)", `<input id="mcp-cid-${esc(s.id)}" autocomplete="off">`, "grow")}
-      ${fld("Client secret", `<input id="mcp-csec-${esc(s.id)}" type="password" autocomplete="off">`)}
-      <button type="button" class="btn sm" data-mcpauth="${esc(s.id)}">${icon("key-round")} Sign in</button>
-      ${s.oauth?.canRefresh ? `<button type="button" class="btn sm ghost" data-mcprefresh="${esc(s.id)}">${icon("refresh-cw")} Refresh token</button>` : ""}</div>` : ""}
+    ${signInBlock(s)}
     <div class="row" role="group" aria-label="Agents allowed to use ${esc(s.id)}"><span class="hint">${icon("bot")} Agents:</span>
       ${agents.map((a) => `<label class="chk"><input type="checkbox" data-mcpgrant="${esc(s.id)}" value="${esc(a.id)}" ${s.agents.includes(a.id) ? "checked" : ""}> ${esc(a.id)}</label>`).join(" ") || `<span class="hint">no agents</span>`}
       <span class="spacer"></span><button type="button" class="btn sm" data-mcpgrantsave="${esc(s.id)}">${icon("save")} Save access</button></div>

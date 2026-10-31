@@ -37,6 +37,27 @@ export function listServers(root) {
   return servers;
 }
 
+export const OAUTH_PROVIDERS = {
+  google: {
+    label: "Google",
+    authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenEndpoint: "https://oauth2.googleapis.com/token",
+    extraParams: { access_type: "offline", prompt: "consent" },
+    helpUrl: "https://console.cloud.google.com/apis/credentials",
+    clientHint: "One-time: Google Cloud Console → enable the Gmail API → APIs & Services → Credentials → Create OAuth client ID (Web application) → add the redirect URI below → paste the Client ID and secret here.",
+  },
+};
+
+// stdio packages that take a bearer token via env: sign in on their behalf.
+const KNOWN_OAUTH = [
+  { test: (a) => /^gmail-mcp(@[\w.-]+)?$/.test(a), provider: "google", tokenEnv: "GOOGLE_ACCESS_TOKEN",
+    scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic" },
+];
+export function oauthPreset(s) {
+  if (s.transport === "http") return null;
+  return KNOWN_OAUTH.find((k) => (s.args || []).some((a) => k.test(String(a)))) || null;
+}
+
 export const secretKey = (num, slot) => `MCP_${num}_${slot}`;
 const envVal = (k) => String(process.env[k] ?? "").trim();
 
@@ -64,11 +85,28 @@ export function serverStatus(s) {
   if (bad.length) return { status: "error", missing: [], hint: `forbidden reference: ${bad.join(", ")}` };
   const missing = serverRefs(s).filter((r) => !envVal(r));
   for (const sl of s.secrets || []) { const k = secretKey(s.num, sl.slot); if (sl.required !== false && !envVal(k) && !missing.includes(k)) missing.push(k); }
-  if (s.oauth && !envVal(secretKey(s.num, "ACCESS_TOKEN")) && !missing.includes(secretKey(s.num, "ACCESS_TOKEN"))) missing.push(secretKey(s.num, "ACCESS_TOKEN"));
-  if (missing.length) return { status: s.oauth ? "needs-auth" : "needs-secret", missing };
+  const oauthy = !!(s.oauth || oauthPreset(s));
+  if (oauthy && !envVal(secretKey(s.num, "ACCESS_TOKEN")) && !missing.includes(secretKey(s.num, "ACCESS_TOKEN"))) missing.push(secretKey(s.num, "ACCESS_TOKEN"));
+  if (missing.length) return { status: oauthy ? "needs-auth" : "needs-secret", missing };
   if (s.authStatus === "needed") return { status: "needs-auth", missing: [], hint: s.authHint || "" };
   if (s.authStatus === "error") return { status: "error", missing: [], hint: s.authHint || "" };
   return { status: "ready", missing: [] };
+}
+
+/** How this server signs in: discover (http), provider preset, or custom endpoints. */
+export function signInInfo(s) {
+  const preset = oauthPreset(s);
+  const provider = s.oauth?.provider || preset?.provider || "";
+  const p = OAUTH_PROVIDERS[provider];
+  const kind = p ? "provider" : s.transport === "http" ? "discover" : "custom";
+  return {
+    kind, provider, label: p?.label || "", helpUrl: p?.helpUrl || "", clientHint: p?.clientHint || "",
+    scope: s.oauth?.scope ?? preset?.scope ?? "", tokenEnv: s.oauth?.tokenEnv || preset?.tokenEnv || "",
+    authorizationEndpoint: kind === "custom" ? s.oauth?.authorizationEndpoint || "" : "",
+    tokenEndpoint: kind === "custom" ? s.oauth?.tokenEndpoint || "" : "",
+    clientSet: !!envVal(secretKey(s.num, "CLIENT_ID")),
+    suggested: kind !== "custom" || !!s.oauth,
+  };
 }
 
 /** Public view: no secret values, only set/unset per slot. */
@@ -80,7 +118,8 @@ export function publicServer(s, agents = []) {
     enabled: s.enabled !== false,
     secrets: (s.secrets || []).map((sl) => ({ slot: sl.slot, label: sl.label || "", key: secretKey(s.num, sl.slot), set: !!envVal(secretKey(s.num, sl.slot)) })),
     oauth: s.oauth ? { authorizationEndpoint: s.oauth.authorizationEndpoint || "", tokenEndpoint: s.oauth.tokenEndpoint || "", scope: s.oauth.scope || "", accessEnv: s.oauth.accessEnv || "",
-      signedIn: !!envVal(secretKey(s.num, "ACCESS_TOKEN")), expiresAt: Number(envVal(secretKey(s.num, "EXPIRES_AT"))) || 0, canRefresh: !!envVal(secretKey(s.num, "REFRESH_TOKEN")) } : null,
+      signedIn: !!envVal(secretKey(s.num, "ACCESS_TOKEN")), signedInAt: s.oauth.signedInAt || "", expiresAt: Number(envVal(secretKey(s.num, "EXPIRES_AT"))) || 0, canRefresh: !!envVal(secretKey(s.num, "REFRESH_TOKEN")) } : null,
+    signIn: signInInfo(s),
     authHint: s.authHint || "", lastTestedAt: s.lastTestedAt || "",
     ...st,
     agents: agents.filter((a) => (a.mcp || []).includes(s.id)).map((a) => a.id),

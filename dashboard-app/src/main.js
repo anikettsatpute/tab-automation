@@ -133,6 +133,32 @@ async function saveCfg() {
   } catch (e) { cfgNotice(`Save failed: ${e.message}`, true); }
 }
 
+// Poll after opening the provider tab; on success run Test so status + tools update.
+async function waitForSignIn(id) {
+  S.mcpAuthWait = id; render();
+  const MCP = "/api/control/mcp";
+  const before = S.mcp?.servers.find((x) => x.id === id)?.oauth?.signedInAt || "";
+  const until = Date.now() + 5 * 60000;
+  while (S.mcpAuthWait === id && Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 2500));
+    try {
+      const r = await api(MCP);
+      const s = r.servers.find((x) => x.id === id);
+      if (s?.oauth?.signedIn && s.oauth.signedInAt && s.oauth.signedInAt !== before) {
+        S.mcp = r; S.mcpAuthWait = null;
+        cfgNotice(`Signed in to ${id} — testing…`); render();
+        try {
+          const t = await api(`${MCP}/${encodeURIComponent(id)}/test`, { method: "POST", body: "{}" }, { timeoutMs: 90000 });
+          if (t.servers) S.mcp = { ...S.mcp, ...t };
+          cfgNotice(t.test?.ok ? `${id} connected: ${t.test.tools.length} tools. Tick the agents that may use it.` : `${id} signed in, but test failed: ${t.test?.hint || "unknown"}`, !t.test?.ok);
+        } catch (e) { cfgNotice(`${id} signed in; test failed: ${e.message}`, true); }
+        render(); return;
+      }
+    } catch { /* keep polling */ }
+  }
+  if (S.mcpAuthWait === id) { S.mcpAuthWait = null; cfgNotice(`Sign-in for ${id} not completed.`, true); render(); }
+}
+
 function wireConfig() {
   if (S.view !== "config") return;
   const c = S.cfgData;
@@ -267,16 +293,29 @@ function wireConfig() {
   }));
   $$("[data-mcpauth]").forEach((b) => (b.onclick = async () => {
     const id = b.dataset.mcpauth;
-    const clientId = $(`#mcp-cid-${id}`)?.value.trim(); const clientSecret = $(`#mcp-csec-${id}`)?.value.trim();
+    const val = (sel) => $(sel)?.value.trim();
+    const body = {};
+    const clientId = val(`#mcp-cid-${id}`);
+    if (clientId) { body.clientId = clientId; body.clientSecret = val(`#mcp-csec-${id}`) || ""; }
+    for (const [k, sel] of [["scope", `#mcp-scope-${id}`], ["tokenEnv", `#mcp-tokenv-${id}`], ["authorizationEndpoint", `#mcp-authep-${id}`], ["tokenEndpoint", `#mcp-tokep-${id}`]]) { const el = $(sel); if (el) body[k] = el.value.trim(); }
     const win = window.open("about:blank", "_blank");
     try {
-      const r = await api(`${MCP}/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify(clientId ? { clientId, clientSecret } : {}) });
+      const r = await api(`${MCP}/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify(body) }, { timeoutMs: 30000 });
       if (win) { win.opener = null; win.location.href = r.authorizeUrl; } else window.open(r.authorizeUrl, "_blank", "noopener");
-      cfgNotice(`Finish sign-in in the new tab, then press Test on ${id}.`);
-      S.mcp = null; render();
-    } catch (e) { try { win?.close(); } catch {} cfgNotice(`Sign-in: ${e.message}`, true); }
+      S.mcpNeedClient = null;
+      waitForSignIn(id);
+    } catch (e) {
+      try { win?.close(); } catch {}
+      if (/NEED_CLIENT/.test(e.message)) { S.mcpNeedClient = id; cfgNotice(`${id} needs an OAuth app (client ID) first — fill it in below and press Sign in again.`, true); render(); }
+      else cfgNotice(`Sign-in: ${e.message}`, true);
+    }
   }));
-  $$("[data-mcprefresh]").forEach((b) => (b.onclick = () => mcpCall(`${MCP}/${encodeURIComponent(b.dataset.mcprefresh)}/oauth/refresh`, {}, "Token refreshed.")));
+  $$("[data-mcpauthcancel]").forEach((b) => (b.onclick = () => { S.mcpAuthWait = null; render(); }));
+  $$("[data-mcpsignout]").forEach((b) => (b.onclick = () => {
+    if (!confirm(`Sign out of ${b.dataset.mcpsignout}? Its tokens are removed from .env.`)) return;
+    mcpCall(`${MCP}/${encodeURIComponent(b.dataset.mcpsignout)}/oauth/signout`, {}, `Signed out of ${b.dataset.mcpsignout}.`).then(render);
+  }));
+  $$("[data-mcprefresh]").forEach((b) => (b.onclick = () => mcpCall(`${MCP}/${encodeURIComponent(b.dataset.mcprefresh)}/oauth/refresh`, {}, "Token refreshed.").then(render)));
   // secrets (.env) — values are write-only; inputs are cleared after save
   if (S.cfgTab === "secrets" && !S.cfgEnv && !S.cfgEnvLoading) {
     S.cfgEnvLoading = true;
