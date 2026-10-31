@@ -32,7 +32,7 @@ test("icon() emits inline <svg> for known names, hook for unknown", () => {
 // --- inventory: every icon("...") / { icon: "..." } name resolves ---
 function collectNames() {
   const names = new Set();
-  for (const f of ["ui.js", "board.js", "tasks.js", "panels.js", "shell.js"]) {
+  for (const f of ["ui.js", "board.js", "runs.js", "panels.js", "shell.js"]) {
     const t = readFileSync(`dashboard-app/src/views/${f}`, "utf8");
     for (const m of t.matchAll(/icon\(\s*["']([^"']+)["']/g)) names.add(m[1]);
     for (const m of t.matchAll(/icon:\s*["']([^"']+)["']/g)) names.add(m[1]);

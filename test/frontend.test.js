@@ -105,7 +105,7 @@ const sliceFn = (src, start, end) => src.slice(src.indexOf(start), end ? src.ind
 test("loop board: selection keeps the list mounted behind the drawer", () => {
   const source = sliceFn(boardSrc, "export function boardView");
   const state = { sel: "t1", boardTab: "tasks", loopTasks: [{ id: "t1" }], tasks: [] };
-  const view = new Function("S", "esc", "isAutomationRun", "icon", "automationRunsView", "filteredLoopTasks", "loopBanners", "loopBoard", "loopBoardHead", "loopDrawer", `${source}; return boardView;`)(state, escHtml, () => false, () => "", () => "RUNS", () => state.loopTasks, () => "BANNERS", () => "LIST", () => "HEAD", () => "DRAWER");
+  const view = new Function("S", "esc", "icon", "automationRuns", "automationRunsView", "filteredLoopTasks", "loopBanners", "loopBoard", "loopBoardHead", "loopDrawer", `${source}; return boardView;`)(state, escHtml, () => "", () => [], () => "RUNS", () => state.loopTasks, () => "BANNERS", () => "LIST", () => "HEAD", () => "DRAWER");
   const html = view();
   for (const k of ["BANNERS", "HEAD", "LIST", "DRAWER", 'data-btab="tasks"', 'data-btab="runs"', "Board view"]) assert.ok(html.includes(k), k);
   state.sel = null;
@@ -134,6 +134,15 @@ test("loop ring + pills: progress is labelled and statuses map to tones", () => 
   assert.match(ring(0, 0, "queued"), /0\/0/);
   assert.match(loopSrc, /blocked: "orange"/);
   assert.match(loopSrc, /failed: "bad"/);
+});
+
+test("automation runs tab renders run pipelines, not flow definitions", () => {
+  const runsSrc = readFileSync("dashboard-app/src/views/runs.js", "utf8");
+  assert.ok(runsSrc.includes('data-rsel="${esc(r.id)}"'), "run rows open a drawer");
+  assert.ok(runsSrc.includes('class="pnodes" aria-label="Pipeline"'), "pipeline nodes per run");
+  assert.ok(runsSrc.includes("data-rstep"), "expandable step outputs");
+  assert.ok(!runsSrc.includes("data-runflow") && !runsSrc.includes("flowcard"), "no flow definition cards");
+  assert.ok(mainSrc.includes("$$(\"[data-rsel]\")"), "run selection wired");
 });
 
 test("pipeline mermaid strips unsafe label characters", () => {

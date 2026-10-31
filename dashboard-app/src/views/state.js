@@ -23,7 +23,7 @@ export const S = {
   // OrchestratorLoop: tasks/counts/engine from /api/control/loop/*.
   loopTasks: [], loopCounts: {}, loopEngine: null, loopRequests: [], loopActivity: [],
   dispatchers: [], loopTypes: [], loopAgents: [], todoForm: false,
-  openSteps: new Set(), files: {}, handoff: null, appendForm: false, boardTab: "tasks",
+  openSteps: new Set(), files: {}, handoff: null, appendForm: false, boardTab: "tasks", runSel: null,
   cmdOpen: false, cmdIdx: 0, theme: "dark",
   groupBy: "status", sortBy: "recent", statusFilter: "", todoTab: "open", todoQ: "", todoSource: "all", showTypes: false,
   showCtx: false, sessIdx: 0, sessExport: null, sessToolFilter: "all", diagFull: false, reqChanges: "", appendTitle: "",

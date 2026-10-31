@@ -18,17 +18,18 @@ function mountTaskDrawer() {
     if (taskTrap) { try { taskTrap.deactivate({ returnFocus: false }); } catch {} taskTrap = null; }
     if (taskTrapSel) {
       const id = taskTrapSel; taskTrapSel = null;
-      const card = document.querySelector(`[data-sel="${id}"]`);
+      const card = document.querySelector(`[data-sel="${id}"],[data-rsel="${id}"]`);
       if (card) card.focus({ preventScroll: true });
     }
     return;
   }
-  if (taskTrap && taskTrapSel === S.sel) {
+  const selId = S.sel || S.runSel;
+  if (taskTrap && taskTrapSel === selId) {
     try { taskTrap.updateContainerElements(drawer); } catch {}
     return;
   }
   if (taskTrap) { try { taskTrap.deactivate({ returnFocus: false }); } catch {} taskTrap = null; }
-  taskTrapSel = S.sel;
+  taskTrapSel = selId;
   try {
     taskTrap = createFocusTrap(drawer, {
       escapeDeactivates: false,
@@ -43,7 +44,7 @@ function mountTaskDrawer() {
 }
 
 function closeTaskDetail() {
-  S.sel = null; S.detail = null; S.diagFull = false; S.appendForm = false; S.confirmDel = false;
+  S.sel = null; S.runSel = null; S.detail = null; S.diagFull = false; S.appendForm = false; S.confirmDel = false;
   S.handoff = null; S.files = {}; S.openSteps = new Set();
   render();
 }
@@ -136,7 +137,9 @@ function wireOnly() {
   if (lo) lo.onclick = async () => { closeFeedStream(); await logoutSession(); render(); };
   $$("[data-view]").forEach((b) => (b.onclick = () => { S.view = b.dataset.view; S.sel = null; S.detail = null; S.fromTab = null; $(".side")?.classList.remove("open"); render(); }));
   $$("[data-statusf]").forEach((b) => (b.onclick = () => { S.statusFilter = S.statusFilter === b.dataset.statusf ? "" : b.dataset.statusf; S.view = "board"; S.sel = null; S.detail = null; render(); }));
-  $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; S.sel = null; S.detail = null; render(); }));
+  $$("[data-btab]").forEach((b) => (b.onclick = () => { S.boardTab = b.dataset.btab; S.sel = null; S.runSel = null; S.detail = null; render(); }));
+  $$("[data-rsel]").forEach((b) => (b.onclick = () => { S.runSel = b.dataset.rsel; S.openSteps = new Set(); render(); }));
+  $$("[data-rstep]").forEach((b) => (b.onclick = () => { const p = Number(b.dataset.rstep); S.openSteps.has(p) ? S.openSteps.delete(p) : S.openSteps.add(p); render(); }));
   $$("[data-dtab]").forEach((b) => (b.onclick = () => { S.detailTab = b.dataset.dtab; render(); }));
   $$("[data-sel]").forEach((b) => (b.onclick = () => openTask(b.dataset.sel)));
   $$("[data-gotask]").forEach((b) => (b.onclick = () => { S.view = "board"; S.boardTab = "tasks"; openTask(b.dataset.gotask); }));
@@ -681,7 +684,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") {
     if (S.cmdOpen) { S.cmdOpen = false; render(); }
     else if (S.showReq) { S.showReq = false; render(); }
-    else if (S.diagFull) { S.diagFull = false; render(); }
+    else if (S.dia || S.runSelgFull) { S.diagFull = false; render(); }
     else if (S.flowEdit) { S.flowEdit = null; render(); }
     else if (S.sel) { closeTaskDetail(); }
   } else if (S.cmdOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {

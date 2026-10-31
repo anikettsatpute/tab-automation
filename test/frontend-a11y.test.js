@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 const uiSrc = readFileSync("dashboard-app/src/views/ui.js", "utf8");
 const shellSrc = readFileSync("dashboard-app/src/views/shell.js", "utf8");
 const boardSrc = readFileSync("dashboard-app/src/views/board.js", "utf8");
-const tasksSrc = readFileSync("dashboard-app/src/views/tasks.js", "utf8");
+const tasksSrc = readFileSync("dashboard-app/src/views/runs.js", "utf8");
 const loopSrc = readFileSync("dashboard-app/src/views/loop.js", "utf8");
 
 // axe aria-progressbar-name (serious): every role="progressbar" needs a name.
@@ -28,7 +28,7 @@ test("pageHead renders an h1 (one per view)", () => {
 
 // axe aria-allowed-role (minor): <button> must not carry role="listitem".
 test("no button carries role=listitem", () => {
-  for (const [name, src] of [["tasks.js", tasksSrc], ["board.js", boardSrc], ["shell.js", shellSrc], ["loop.js", loopSrc]]) {
+  for (const [name, src] of [["runs.js", tasksSrc], ["board.js", boardSrc], ["shell.js", shellSrc], ["loop.js", loopSrc]]) {
     assert.doesNotMatch(src, /<button[^>]*role="listitem"/, `${name}: button with role=listitem`);
   }
 });
@@ -38,7 +38,7 @@ test("no button carries role=listitem", () => {
 // .banners container keeps aria-label="Needs attention" — that is fine;
 // the rule targets the buttons' own names.)
 test("card and banner buttons use visible text as the accessible name", () => {
-  assert.doesNotMatch(tasksSrc, /class="bcard[^"]*"[^>]*aria-label=/, "tasks.js: bcard must not set aria-label");
+  assert.doesNotMatch(tasksSrc, /class="bcard[^"]*"[^>]*aria-label=/, "runs.js: bcard must not set aria-label");
   assert.doesNotMatch(boardSrc, /class="bcard[^"]*"[^>]*aria-label=/, "board.js: bcard must not set aria-label");
   assert.doesNotMatch(loopSrc, /class="(lrow|lbanner)[ "][^>]*aria-label=/, "loop.js: rows/banners must not set aria-label");
   assert.doesNotMatch(shellSrc, /<button[^>]*class="banner[^>]*aria-label=|aria-label=[^>]*class="banner/, "shell.js: banner button must not set aria-label");
@@ -66,7 +66,7 @@ test("tick() offline contract: keep data, 30s banner threshold", () => {
 
 // No runtime CDN: dashboard must load offline (blocked-network safe).
 test("no runtime CDN references in dashboard sources", () => {
-  for (const [name, src] of [["ui.js", uiSrc], ["shell.js", shellSrc], ["board.js", boardSrc], ["tasks.js", tasksSrc]]) {
+  for (const [name, src] of [["ui.js", uiSrc], ["shell.js", shellSrc], ["board.js", boardSrc], ["runs.js", tasksSrc]]) {
     assert.doesNotMatch(src, /unpkg|jsdelivr|googleapis|gstatic/, `${name}: no CDN hosts`);
     assert.doesNotMatch(src, /from\s+["']https?:/, `${name}: no remote imports`);
   }
