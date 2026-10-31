@@ -133,6 +133,38 @@
       ],
       "lastTestedAt": "2026-10-31T16:06:58.953Z",
       "authStatus": "ok"
+    },
+    {
+      "id": "finance-us",
+      "name": "Finance (US stocks)",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "yahoo-finance-mcp"
+      ],
+      "note": "Built-in: US stock quotes, historicals, news, recommendations via Yahoo Finance (no key needed). Default for finance-us.",
+      "num": 5,
+      "authStatus": "ok",
+      "authHint": "",
+      "tools": [
+        "get_quote",
+        "get_historical_data",
+        "search_symbols",
+        "get_company_info",
+        "get_recommendations",
+        "get_trending_symbols",
+        "get_market_summary",
+        "get_news",
+        "get_options",
+        "get_insights",
+        "get_daily_gainers",
+        "get_daily_losers",
+        "get_chart",
+        "get_quote_summary",
+        "get_fundamentals_time_series"
+      ],
+      "lastTestedAt": "2026-10-31T22:45:00.000Z"
     }
   ],
   "customTools": [
@@ -168,5 +200,5 @@
       "approvalRequired": true
     }
   ],
-  "mcpNextNum": 4
+  "mcpNextNum": 5
 }
