@@ -66,58 +66,28 @@ export function brainView() {
   <td class="hint">${esc(x.outboxSummary || (st(x) === "replied" || st(x) === "reply_generated" ? "1 sent" : "—"))}</td></tr>`; }).join("") || `<tr><td colspan="5">${emptyState("brain", "No messages", "Discord mentions will land here.")}</td></tr>`}
   </tbody></table></div>
   ${sel ? `<div class="appr" role="dialog" aria-modal="false" aria-label="Message details" id="brain-drawer"><div class="row"><b>Message</b><span class="kbd">${esc(sel.id || sel.jobId || "")}</span><span class="spacer"></span><button class="btn sm ghost" id="brainx" aria-label="Close message details">${icon("x")}</button></div>
-  <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "decider" ? "on" : ""}" data-btab2="decider">${icon("bot")} Decider agent</button><button class="tab ${S.brainTab === "session" ? "on" : ""}" data-btab2="session">${icon("terminal")} Pipeline session</button></div>
+  <div class="row"><button class="tab ${S.brainTab === "details" ? "on" : ""}" data-btab2="details">${icon("file-text")} Message details</button><button class="tab ${S.brainTab === "decider" ? "on" : ""}" data-btab2="decider">${icon("bot")} Decider agent</button></div>
   ${S.brainTab === "details" ? `<div class="grid2"><span>Job ID</span><span class="kbd">${esc(sel.jobId || sel.id || "")}</span><span>Actor ID</span><span class="kbd">${esc(sel.actorId || "—")}</span><span>Conversation</span><span class="kbd">${esc(sel.conversationId || sel.channelId || "—")}</span><span>Updated</span><span>${esc(String(ts(sel)).slice(0, 19).replace("T", " "))}</span></div>
   ${sel.linkedTaskId ? `<p class="dim">Linked work: <span class="kbd">${esc(sel.linkedTaskId)}</span></p>` : ""}
   ${sel.processingError ? `<div class="status bad">${esc(sel.processingError)}</div>` : ""}
   <p class="dim">From <b>${esc(sel.sender)}</b> · status ${esc(st(sel))}</p><div class="endgoal">${esc(String(txt(sel)).slice(0, 2000))}</div>
   ${sel.requestText ? `<p class="dim">Request:</p><pre class="out">${esc(String(sel.requestText).slice(0, 1000))}</pre>` : ""}`
-  : S.brainTab === "decider" ? brainDecider(sel)
-  : brainSession(sel)}</div>` : ""}</div>`;
+  : brainDecider(sel)}</div>` : ""}</div>`;
 }
 
-// Decider agent tab: ONLY the router transcript — what the assistant that
-// decided on this message saw and did. Never mixed with pipeline detail.
+// Decider agent tab: the FULL router session — prompt, thinking, tool calls,
+// decision — or nothing at all. No summaries, no pipeline content. If the
+// transcript is absent (keyword router, still writing, legacy row), the tab
+// says so and stops; it never shows a partial decision grid as a substitute.
 function brainDecider(sel) {
   const key = `brain:${sel.id}`;
   const s = S.chats?.[key];
-  const r = s?.router || null;
-  const d = r?.decision || null;
-  const head = `<div class="sessgrid"><span>Runner</span><span>${esc(r?.dispatcher === "copilot" ? "GitHub Copilot CLI" : r?.dispatcher === "muse" ? "Muse CLI" : "Keyword router (no AI session)")}</span>
-  ${r?.sessionId ? `<span>Session</span><span class="kbd">${esc(r.sessionId)}</span>` : ""}
-  ${d ? `<span>Decision</span><span><b>${esc(d.action)}</b>${d.automationId ? ` · ${esc(d.automationId)}` : ""}${d.taskType ? ` · ${esc(d.taskType)}` : ""}</span><span>Why</span><span>${esc(d.reason || "—")}</span>` : ""}
-  ${d?.goal ? `<span>Goal</span><span>${esc(d.goal)}</span>` : ""}
-  ${d?.question ? `<span>Asked</span><span>${esc(d.question)}</span>` : ""}
-  ${r?.durationMs ? `<span>Duration</span><span>${(r.durationMs / 1000).toFixed(1)}s${r.exitCode != null ? ` · exit ${r.exitCode}` : ""}</span>` : ""}
-  ${r?.error ? `<span>Error</span><span>${esc(r.error)}</span>` : ""}
-  ${sel.linkedTaskId ? `<span>Linked work</span><span class="kbd">${esc(sel.linkedTaskId)}</span>` : ""}</div>`;
-  return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}
-  <div class="lsec-h">${icon("bot")} Transcript — prompt, thinking, tool calls, decision</div>${s.chat ? chatView(s.chat, `${key}:router`) : `<p class="hint">No CLI session for this message (keyword router decided without AI, or the transcript is still writing).</p>`}
-  ${s.prompt ? `<details><summary class="hint">Full router prompt (${s.prompt.length.toLocaleString()} chars)</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}`}</div>`;
-}
-
-function brainSession(sel) {
-  const key = `brain:${sel.id}`;
-  const s = S.chats?.[key];
-  const r = s?.router || null;
-  const d = r?.decision || null;
-  const head = `<div class="sessgrid"><span>Runner</span><span>${esc(r?.dispatcher === "copilot" ? "GitHub Copilot CLI" : r?.dispatcher === "muse" ? "Muse CLI" : "Keyword router (no AI session)")}</span>
-  ${r?.sessionId ? `<span>Session</span><span class="kbd">${esc(r.sessionId)}</span>` : ""}
-  ${d ? `<span>Decision</span><span><b>${esc(d.action)}</b>${d.automationId ? ` · ${esc(d.automationId)}` : ""}${d.taskType ? ` · ${esc(d.taskType)}` : ""}</span><span>Why</span><span>${esc(d.reason || "—")}</span>` : ""}
-  ${d?.goal ? `<span>Goal</span><span>${esc(d.goal)}</span>` : ""}
-  ${d?.question ? `<span>Asked</span><span>${esc(d.question)}</span>` : ""}
-  ${r?.durationMs ? `<span>Duration</span><span>${(r.durationMs / 1000).toFixed(1)}s${r.exitCode != null ? ` · exit ${r.exitCode}` : ""}</span>` : ""}
-  ${r?.error ? `<span>Error</span><span>${esc(r.error)}</span>` : ""}
-  ${sel.linkedTaskId ? `<span>Linked work</span><span class="kbd">${esc(sel.linkedTaskId)}</span>` : ""}</div>`;
-  const tasks = (s?.tasks || []).length ? `<div class="lsec-h">${icon("list-ordered")} Pipeline tasks</div><ul class="plain">${s.tasks.map((t) => `<li><button type="button" class="btn sm ghost" data-gotask="${esc(t.id)}">#${esc(t.seq)} ${esc(t.title)}</button> ${lpill(t.status)}</li>`).join("")}</ul>` : "";
-  // Full pipeline detail (steps, attempts, artifacts, events) when the
-  // backend provides it — same shape as the Board task drawer.
-  const steps = (s?.steps || []).length ? `<div class="lsec-h">${icon("list-ordered")} Steps</div>${s.steps.map((x) => `<div class="row"><span class="kbd">${x.pos + 1}</span><b>${esc(x.role)}</b><span class="hint">${esc(String(x.goal || "").slice(0, 80))}</span><span class="spacer"></span>${lpill(x.status)}</div>${x.summary ? `<div class="mdbox" style="margin:4px 0">${esc(String(x.summary).slice(0, 500))}</div>` : ""}`).join("")}` : "";
-  const taskId = (s?.tasks || [])[0]?.id || "";
-  const attempts = (s?.attempts || []).length ? `<div class="lsec-h">${icon("terminal")} Agent sessions (${s.attempts.length})</div>${s.attempts.map((a) => `<div class="row"><span class="kbd">${esc(a.role)}</span><span class="hint">step ${a.pos + 1} · attempt ${a.attempt} · ${esc(a.dispatcher === "copilot" ? "Copilot" : "Muse")}${a.model ? ` · ${esc(a.model)}` : ""}${a.duration_ms ? ` · ${(a.duration_ms / 1000).toFixed(0)}s` : ""}</span><span class="spacer"></span>${lpill(a.status)}</div><div data-chatload="loop:${esc(a.id)}" data-task="${esc(taskId)}">${chatView(S.chats?.[`loop:${a.id}`] || { loading: a.status === "running" }, `loop:${a.id}`)}</div>`).join("")}` : "";
-  const artifacts = (s?.artifacts || []).length ? `<div class="lsec-h">${icon("file-plus")} Artifacts (${s.artifacts.length})</div>${s.artifacts.map((a) => `<div class="dgcard"><b>${esc(a.title || a.kind)}</b> <span class="kbd">${esc(a.kind)}</span>${a.path ? ` <span class="hint">${esc(a.path)}</span>` : ""}${a.kind === "link" && a.body ? ` <a href="${esc(a.body)}" target="_blank" rel="noopener">${esc(a.body.slice(0, 80))}</a>` : ""}${a.kind !== "link" && a.body ? `<div class="mdbox" style="margin-top:6px">${esc(String(a.body).slice(0, 500))}</div>` : ""}</div>`).join("")}` : "";
-  return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}
-  ${tasks}${steps}${attempts}${artifacts}`}</div>`;
+  const hasSession = !!(s?.chat?.items?.length || s?.prompt);
+  if (!s || s.loading) return `<div data-chatload="${esc(key)}"><p class="hint" role="status">Loading decider session…</p></div>`;
+  if (s.error) return `<div data-chatload="${esc(key)}"><div class="status bad" role="alert">${esc(s.error)}</div></div>`;
+  if (!hasSession) return `<div data-chatload="${esc(key)}">${emptyState("bot", "No decider session", "This message was handled without an AI routing session (keyword router), or its transcript is unavailable.")}</div>`;
+  return `<div data-chatload="${esc(key)}">${chatView(s.chat, `${key}:router`)}
+  ${s.prompt ? `<details><summary class="hint">Full router prompt (${s.prompt.length.toLocaleString()} chars)</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}</div>`;
 }
 
 export function requestsView() {
