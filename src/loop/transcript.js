@@ -47,7 +47,11 @@ function museToolText(text) {
   if (o && typeof o === "object" && ("output" in o || "command" in o)) {
     return { command: o.command, title: o.description, output: o.output ?? "", exitCode: Number.isFinite(o.exit_code) ? o.exit_code : null };
   }
-  return { output: String(text || "") };
+  // Non-shell tools lead with a one-line summary, e.g. "Read text file `x`."
+  const s = String(text || "");
+  const nl = s.indexOf("\n");
+  const head = (nl < 0 ? s : s.slice(0, nl)).trim();
+  return head.length && head.length <= 200 ? { title: head, output: nl < 0 ? "" : s.slice(nl + 1) } : { output: s };
 }
 
 function parseMuseExec(recs) {
@@ -94,6 +98,7 @@ function parseCopilot(recs) {
       case "session.auto_mode_resolved": b.meta.model = d.chosenModel || b.meta.model; break;
       case "session.tools_updated": b.meta.model = b.meta.model || d.model || ""; break;
       case "user.message": b.say("user", d.content); break;
+      case "assistant.reasoning": b.say("thinking", d.content); break;
       case "assistant.message":
         if (d.model) b.meta.model = d.model;
         b.say("assistant", d.content);

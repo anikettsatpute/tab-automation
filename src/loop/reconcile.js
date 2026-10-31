@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import Ajv from "ajv";
 import * as store from "./store.js";
 import { appendHandoff, taskDir, isInside, writeTaskSnapshot } from "./workspace.js";
-import { finalAssistantText } from "./transcript.js";
+import { finalAssistantText, parseTranscript } from "./transcript.js";
 
 const require = createRequire(import.meta.url);
 const ajv = new Ajv({ allErrors: true, strict: false });
@@ -122,7 +122,9 @@ export function reconcileAttempt(root, { attemptId, stdout = "", exitCode = 0, d
       }
       store.addArtifact(root, task.id, { pos: step.pos, attempt: att.attempt, kind: a.kind, title: a.title || a.kind, body: a.body || "", path: a.path || "" });
     }
-    const tokens = Number(result.metrics?.tokens) || 0;
+    // Agents often self-report 0; the CLI's own usage stream is authoritative when present.
+    const u = parseTranscript(stdout).meta?.usage;
+    const tokens = Number(result.metrics?.tokens) || (Number(u?.input) || 0) + (Number(u?.output) || 0);
     const tools = Number(result.metrics?.tool_calls) || 0;
     const roles = knownRoles ? new Set(knownRoles) : null;
     for (const sp of result.status === "done" ? result.spawn_tasks : []) {
