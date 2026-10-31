@@ -87,7 +87,7 @@ export const copilot = {
   available() {
     const r = spawnSync(copilotBin(), ["--version"], { encoding: "utf8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] });
     const out = `${r.stdout || ""}${r.stderr || ""}`;
-    if (r.status === 0 && !/Cannot find GitHub Copilot CLI|Install GitHub Copilot CLI/i.test(out)) return { ok: true, version: String(r.stdout).trim() };
+    if (r.status === 0 && !/Cannot find GitHub Copilot CLI|Install GitHub Copilot CLI/i.test(out)) return { ok: true, version: String(r.stdout).trim().split("\n")[0] };
     return { ok: false, error: r.error?.message || "GitHub Copilot CLI not installed (npm i -g @github/copilot, then `copilot` once to log in)" };
   },
   async dispatch(cfg, { key, model, cwd, promptText, taskDir, transcriptPath, timeoutMs = 900000 }) {
