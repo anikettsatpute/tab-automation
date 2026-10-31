@@ -15,7 +15,12 @@
     "list": "node src/index.js --list",
     "dashboard:build": "vite build --config vite.dashboard.config.js",
     "dashboard:dev": "vite build --config vite.dashboard.config.js --watch",
-    "prestart": "node scripts/ensure-dashboard.js"
+    "prestart": "node scripts/ensure-dashboard.js",
+    "deploy": "bash scripts/deploy-laptop.sh --no-tunnel",
+    "deploy:tunnel": "bash scripts/deploy-laptop.sh",
+    "tunnel": "bash scripts/tunnel.sh start",
+    "tunnel:stop": "bash scripts/tunnel.sh stop",
+    "tunnel:status": "bash scripts/tunnel.sh status"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
