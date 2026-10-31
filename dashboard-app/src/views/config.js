@@ -13,6 +13,7 @@ export const CFG_TABS = [
   ["pipelines", "Pipelines", "git-branch"],
   ["mcp", "MCP servers", "wrench"],
   ["secrets", "Secrets (.env)", "key-round"],
+  ["access", "Access", "lock"],
 ];
 const MCP_STATUS = { ready: "ok", disabled: "", "needs-secret": "warn", "needs-auth": "warn", error: "bad" };
 const BUILTIN_CMDS = ["!remember <text>", "!recall <q>", "!todo <text>", "!todos", "!history", "!automations", "!pipelines", "!pipeline <id> <goal>"];
@@ -266,13 +267,31 @@ function secretsTab() {
   <div class="row"><span class="spacer"></span><button type="button" class="btn sm primary" id="env-save">${icon("save")} Save secrets</button></div>`);
 }
 
+function accessTab() {
+  const a = S.access;
+  if (!a) return section("Remote access", `<p class="hint" aria-busy="true">Loading…</p>`);
+  return section("Remote access", `
+  <p class="hint">${icon("shield-check")} Remote browsers (tunnel URL) sign in with this token. Local browsers on this machine sign in with one click, no token needed. The token value is write-only — never shown back.</p>
+  <div class="row"><b>Dashboard token</b>
+    <span class="tag ${a.tokenSet ? "ok" : "bad"}">${a.tokenSet ? "set" : "not set"}</span>
+    ${a.source ? `<span class="hint">from ${esc(a.source)}</span>` : ""}
+    <span class="spacer"></span>
+    ${a.tokenSet ? `<button type="button" class="btn sm ghost" data-accessclear="CONTROL_TOKEN">${icon("x")} Clear token</button>` : ""}</div>
+  <div class="row">
+    ${fld("New token (min 16 chars)", `<input id="access-token" type="password" autocomplete="new-password" spellcheck="false" placeholder="type a new token">`, "grow")}
+    <button type="button" class="btn sm primary" id="access-save">${icon("save")} Set token</button></div>
+  <p class="hint">After setting: restart the bot, then open the tunnel URL and sign in with this token once.</p>
+  ${a.tunnelUrl ? `<p class="hint">${icon("globe")} Tunnel: <a href="${esc(a.tunnelUrl)}/dashboard" target="_blank" rel="noopener">${esc(a.tunnelUrl)}</a></p>` : `<p class="hint">${icon("globe")} No tunnel running — <span class="kbd">npm run tunnel</span> to expose this machine.</p>`}
+  ${a.local ? `<p class="hint">${icon("info")} You are on this machine — no token needed here.</p>` : ""}`);
+}
+
 export function configView() {
   const c = S.cfgData;
   if (!c) return `<div class="card" aria-busy="true"><h3>Configuration</h3><div class="skel" style="height:18px;width:60%"></div><div class="skel" style="height:12px;width:90%"></div><p class="hint">Loading providers, models, prompts…</p></div>`;
   const tab = CFG_TABS.some(([v]) => v === S.cfgTab) ? S.cfgTab : "providers";
-  const body = tab === "discord" ? discordTab(c) : tab === "agents" ? agentsTab(c) : tab === "pipelines" ? pipelinesTab() : tab === "mcp" ? mcpTab() : tab === "secrets" ? secretsTab() : providersTab(c);
+  const body = tab === "discord" ? discordTab(c) : tab === "agents" ? agentsTab(c) : tab === "pipelines" ? pipelinesTab() : tab === "mcp" ? mcpTab() : tab === "secrets" ? secretsTab() : tab === "access" ? accessTab() : providersTab(c);
   return `
-  ${pageHead("Configuration", "providers · discord · agents · pipelines · mcp · secrets", S.cfgDirty ? `<span class="tag warn">unsaved changes</span><button type="button" class="btn sm primary" id="cfgsave">${icon("save")} Save</button>` : "")}
+  ${pageHead("Configuration", "providers · discord · agents · pipelines · mcp · secrets · access", S.cfgDirty ? `<span class="tag warn">unsaved changes</span><button type="button" class="btn sm primary" id="cfgsave">${icon("save")} Save</button>` : "")}
   ${S.cfgMsg ? `<div class="notice ${S.cfgErr ? "bad" : "ok"}" role="status">${icon(S.cfgErr ? "alert-triangle" : "check-circle-2")} ${esc(S.cfgMsg)}</div>` : ""}
   ${tabBar()}
   ${body}`;

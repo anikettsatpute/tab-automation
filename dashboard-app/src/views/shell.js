@@ -77,7 +77,7 @@ export function accessGate() {
          <input id="auth-token" type="password" autocomplete="off" placeholder="CONTROL_TOKEN" value="">
          <button type="button" class="btn primary sm" id="auth-go" ${busy}>${S.auth.busy ? "Signing in…" : "Sign in"}</button></div>`}
     ${S.auth.error && !S.auth.local ? `<div class="status bad" role="alert">${esc(S.auth.error)}</div>` : ""}
-    <p class="hint">No token configured on the server? Set <span class="kbd">CONTROL_TOKEN</span> env and restart — remote stays fail-closed until then.</p>
+    <p class="hint">No token configured on the server? On this machine open <b>Configuration → Access</b> and set one, then restart — remote stays fail-closed until then.</p>
   </div>`;
 }
 

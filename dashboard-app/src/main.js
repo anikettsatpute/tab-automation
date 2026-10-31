@@ -68,7 +68,7 @@ function renderRegion(sel, html) {
 // can link straight to it (#/board/tasks, #/config/mcp, #/board/tasks/<id>).
 // State stays the source of truth; the hash mirrors it (and restores it on load).
 const ROUTE_VIEWS = ["board", "brain", "todos", "automations", "config", "requests", "activity", "retro", "logs", "tools", "agents"];
-const ROUTE_CFGTABS = ["providers", "discord", "agents", "pipelines", "mcp", "secrets"];
+const ROUTE_CFGTABS = ["providers", "discord", "agents", "pipelines", "mcp", "secrets", "access"];
 const ROUTE_BTABS = ["tasks", "runs"];
 function routeHash() {
   let h = `#/${S.view}`;
@@ -209,7 +209,27 @@ function wireConfig() {
   if (S.view !== "config") return;
   const c = S.cfgData;
   const dirty = () => { if (!S.cfgDirty) { S.cfgDirty = true; render(); } };
-  $$("[data-cfgtab]").forEach((b) => (b.onclick = () => { S.cfgTab = b.dataset.cfgtab; if (S.cfgTab === "secrets") S.cfgEnv = null; render(); }));
+  $$("[data-cfgtab]").forEach((b) => (b.onclick = () => { S.cfgTab = b.dataset.cfgtab; if (S.cfgTab === "secrets") S.cfgEnv = null; if (S.cfgTab === "access") S.access = null; render(); }));
+  // access (dashboard token) — write-only; status shows set/unset + tunnel URL
+  if (S.cfgTab === "access" && !S.access) {
+    api("/api/control/access").then((r) => { S.access = r; }).catch((e) => cfgNotice(`Access load failed: ${e.message}`, true)).finally(() => render());
+  }
+  const accSave = $("#access-save"); if (accSave) accSave.onclick = async () => {
+    const el = $("#access-token"); const v = el ? el.value.trim() : "";
+    if (el) el.value = "";
+    if (!v) { cfgNotice("Type a new token first (min 16 chars).", true); return; }
+    try {
+      const r = await api("/api/control/access", { method: "POST", body: JSON.stringify({ token: v }) });
+      S.access = r; cfgNotice("Dashboard token saved — restart the bot, then sign in remotely with it.");
+    } catch (e) { cfgNotice(`Token save failed: ${e.message}`, true); }
+  };
+  $$("[data-accessclear]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Clear the dashboard token? Remote tunnel access will be disabled until you set a new one.")) return;
+    try {
+      const r = await api("/api/control/access", { method: "POST", body: JSON.stringify({ clear: true }) });
+      S.access = r; cfgNotice("Dashboard token cleared — remote access disabled.");
+    } catch (e) { cfgNotice(`Clear failed: ${e.message}`, true); }
+  }));
   for (const id of ["#cfgsave", "#cfgsave2", "#cfgsave3"]) { const b = $(id); if (b) b.onclick = saveCfg; }
   // providers
   $$("[data-pi]").forEach((el) => (el.onchange = () => {

@@ -127,6 +127,46 @@ export function registerConfigRoutes(app, ctx) {
     return g.ok ? null : c.json({ error: g.error }, g.status);
   };
 
+  // Dashboard remote-access token: write-only. GET reports set/unset + source
+  // + tunnel URL (never the value). POST sets (min 16 chars) or clears.
+  // Local-only in spirit: remote callers must already hold a session, so a
+  // stranger can't set the token — but the first set must happen locally.
+  const accessView = async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    let tunnelUrl = "";
+    try {
+      const f = path.join(root, "data/tunnel-url.txt");
+      if (existsSync(f)) tunnelUrl = readFileSync(f, "utf8").trim();
+    } catch {}
+    const v = String(process.env.CONTROL_TOKEN || "").trim();
+    return { ok: true, tokenSet: v.length > 0, source: v ? (existsSync(path.join(root, ".env")) && readFileSync(path.join(root, ".env"), "utf8").includes("CONTROL_TOKEN=") ? ".env" : "process") : "", tunnelUrl, local: true };
+  };
+  app.get("/api/control/access", async (c) => {
+    const denied = await guardAll(c); if (denied) return denied;
+    try { return c.json(await accessView()); }
+    catch (err) { return c.json({ error: err.message }, 500); }
+  });
+  app.post("/api/control/access", async (c) => {
+    const denied = await guardAll(c); if (denied) return denied;
+    const { auditActor } = await import("../services/access.js");
+    try {
+      const b = await c.req.json().catch(() => ({}));
+      if (b.clear) {
+        writeEnv(root, { CONTROL_TOKEN: null });
+        const { audit } = await import("../db.js");
+        audit(root, { actor: auditActor(c), action: "config.access", target: "CONTROL_TOKEN", detail: "-CONTROL_TOKEN" });
+        return c.json(await accessView());
+      }
+      const token = String(b.token || "").trim();
+      if (token.length < 16) return c.json({ error: "token must be at least 16 characters" }, 400);
+      if (/\s/.test(token)) return c.json({ error: "token must not contain whitespace" }, 400);
+      writeEnv(root, { CONTROL_TOKEN: token });
+      const { audit } = await import("../db.js");
+      audit(root, { actor: auditActor(c), action: "config.access", target: "CONTROL_TOKEN", detail: "+CONTROL_TOKEN" });
+      return c.json(await accessView());
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
   app.post("/api/control/config", async (c) => {
     const denied = await guardAll(c); if (denied) return denied;
     const { auditActor } = await import("../services/access.js");

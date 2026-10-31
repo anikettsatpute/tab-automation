@@ -171,6 +171,31 @@ test(".env editor: allowlisted, write-only, atomic 0600, hot-applied, audited by
   delete process.env.DISCORD_BOT_TOKEN;
 });
 
+test("access token: write-only set/clear, never returned", async () => {
+  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
+  const get = async () => json(await req(app, "/api/control/access"));
+  const post = async (body) => json(await req(app, "/api/control/access", { method: "POST", body }));
+  let r = await get();
+  assert.equal(r.status, 200);
+  assert.equal(r.data.tokenSet, false);
+  assert.deepEqual(Object.keys(r.data).sort(), ["local", "ok", "source", "tokenSet", "tunnelUrl"], "no value field");
+  r = await post({ token: "short" });
+  assert.equal(r.status, 400);
+  r = await post({ token: "has space in it 12345678" });
+  assert.equal(r.status, 400);
+  r = await post({ token: "local-test-token-12345678" });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.tokenSet, true);
+  assert.equal(r.data.source, ".env");
+  assert.ok(!JSON.stringify(r.data).includes("local-test-token"), "value never returned");
+  assert.equal(process.env.CONTROL_TOKEN, "local-test-token-12345678");
+  r = await post({ clear: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.tokenSet, false);
+  assert.equal(process.env.CONTROL_TOKEN, undefined);
+  delete process.env.CONTROL_TOKEN;
+});
+
 test("retro counts agent pipelines and backfills tokens from transcripts", async () => {
   const store = await import("../../src/loop/store.js");
   const { backfillTaskUsage } = await import("../../src/loop/reconcile.js");
