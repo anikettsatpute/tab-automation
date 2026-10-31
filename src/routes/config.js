@@ -5,7 +5,6 @@ import { getConfig, setConfig, writeLog, listAutomations } from "../db.js";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { atomicWrite } from "../loop/workspace.js";
-import { BUILTIN_COMMANDS, COMMAND_RE, BINDING_KINDS, commandBindings } from "../discord-commands.js";
 import { allowedKeys, envStatus, validateEnvValue, writeEnv } from "../services/envfile.js";
 
 const REDACTED = "••••••";
@@ -87,7 +86,6 @@ function discordView(root, cfg) {
   return {
     mainChannelId: doc.mainChannelId || "", extraChannels: doc.extraChannels || [],
     ownerUserId: doc.ownerUserId || "", guildId: doc.guildId || "",
-    commands: commandBindings(doc),
     // Secrets never leave the server: only report whether they are set.
     tokenSet: env("DISCORD_BOT_TOKEN"),
     envOverrides: { mainChannelId: env("DISCORD_CHANNEL_ID"), ownerUserId: env("DISCORD_OWNER_USER_ID"), guildId: env("DISCORD_GUILD_ID") },
@@ -186,11 +184,6 @@ export function registerConfigRoutes(app, ctx) {
       const extra = (Array.isArray(b.extraChannels) ? b.extraChannels : String(b.extraChannels || "").split(/[\s,]+/)).map((s) => String(s).trim()).filter(Boolean);
       if (extra.length > 20 || extra.some((v) => !SNOWFLAKE_RE.test(v))) return c.json({ error: "extraChannels must be up to 20 numeric Discord ids" }, 400);
       const doc = { ...readCfg(root, "config/discord.json", {}), ...ids, extraChannels: extra };
-      if (Array.isArray(b.commands)) {
-        const err = validateBindings(b.commands);
-        if (err) return c.json({ error: err }, 400);
-        doc.commands = b.commands.map((x) => ({ command: String(x.command), kind: x.kind, target: String(x.target) }));
-      }
       writeCfg(root, "config/discord.json", doc);
       // Hot-apply where no env var overrides the file value.
       if (cfg.discord) {
@@ -203,34 +196,6 @@ export function registerConfigRoutes(app, ctx) {
       return c.json({ ok: true, discord: discordView(root, cfg) });
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
-
-  /** Bindings: command -> automation | pipeline. Rejects built-ins, duplicates,
-   *  commands already owned by an automation trigger, and unknown targets. */
-  function validateBindings(list) {
-    if (list.length > 50) return "at most 50 command bindings";
-    const seen = new Set();
-    const pipelines = new Set((readCfg(root, "config/task-types.json", { taskTypes: [] }).taskTypes || []).map((t) => t.id));
-    let dbAutos = [];
-    try { dbAutos = listAutomations(root); } catch { /* DB optional */ }
-    const autoIds = new Set([...(cfg.workflows || []).map((w) => w.id), ...dbAutos.map((a) => a.id)]);
-    const triggerOwners = new Map([
-      ...(cfg.workflows || []).filter((w) => w.trigger?.type === "discord" && w.trigger?.command).map((w) => [w.trigger.command, w.id]),
-      ...dbAutos.filter((a) => a.trigger_type === "discord" && a.trigger_config?.command).map((a) => [a.trigger_config.command, a.id]),
-    ]);
-    for (const x of list) {
-      const cmd = String(x?.command || "");
-      if (!COMMAND_RE.test(cmd)) return `command '${cmd}' must be lowercase letters/digits/-/_ (no '!'), max 24`;
-      if (BUILTIN_COMMANDS.includes(cmd)) return `!${cmd} is a built-in command`;
-      if (seen.has(cmd)) return `!${cmd} is bound twice`;
-      seen.add(cmd);
-      if (triggerOwners.has(cmd)) return `!${cmd} is already the trigger of automation ${triggerOwners.get(cmd)}`;
-      if (!BINDING_KINDS.includes(x.kind)) return `!${cmd}: kind must be automation or pipeline`;
-      const t = String(x.target || "");
-      if (x.kind === "pipeline" && !pipelines.has(t)) return `!${cmd}: unknown pipeline '${t}'`;
-      if (x.kind === "automation" && !autoIds.has(t)) return `!${cmd}: unknown automation '${t}'`;
-    }
-    return null;
-  }
 
   // .env secrets: write-only. GET returns names + set/unset (and values only
   // for non-secret keys). POST sets/clears allowlisted keys.

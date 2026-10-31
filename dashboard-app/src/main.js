@@ -204,25 +204,6 @@ function wireConfig() {
       cfgNotice(`Pipeline ${id} started — watch it on the Board.`); tick(true);
     } catch (e) { cfgNotice(`Run failed: ${e.message}`, true); }
   }));
-  // discord command bindings (edited locally in S.dcBinds until saved)
-  const binds = () => (S.dcBinds ??= JSON.parse(JSON.stringify(c?.discord?.commands || [])));
-  $$("[data-bi]").forEach((el) => (el.onchange = () => {
-    const b = binds()[+el.dataset.bi]; if (!b) return;
-    b[el.dataset.bf] = el.value.trim().replace(/^!/, "").toLowerCase();
-    if (el.dataset.bf === "kind") { b.target = ""; render(); }
-  }));
-  $$("[data-bdel]").forEach((b) => (b.onclick = () => { binds().splice(+b.dataset.bdel, 1); render(); }));
-  const ab = $("#dc-addbind"); if (ab) ab.onclick = () => { binds().push({ command: "", kind: "automation", target: "" }); render(); };
-  const sb = $("#dc-savebind"); if (sb) sb.onclick = async () => {
-    const d = c?.discord || {};
-    const body = { mainChannelId: d.mainChannelId, guildId: d.guildId, ownerUserId: d.ownerUserId, extraChannels: d.extraChannels || [], commands: binds() };
-    try {
-      const r = await api("/api/control/config/discord", { method: "POST", body: JSON.stringify(body) });
-      if (r.discord) S.cfgData.discord = r.discord;
-      S.dcBinds = null;
-      cfgNotice("Command bindings saved — live in Discord now.");
-    } catch (e) { cfgNotice(`Bindings save failed: ${e.message}`, true); }
-  };
   // secrets (.env) — values are write-only; inputs are cleared after save
   if (S.cfgTab === "secrets" && !S.cfgEnv && !S.cfgEnvLoading) {
     S.cfgEnvLoading = true;

@@ -64,12 +64,10 @@ function discordTab(c) {
   ${fld("Extra channels (comma separated IDs)", `<input id="dc-extra" value="${esc((d.extraChannels || []).join(", "))}">`)}
   ${Object.values(d.envOverrides || {}).some(Boolean) ? `<p class="hint">${icon("info")} Some values are overridden by env vars (${Object.entries(d.envOverrides).filter(([, v]) => v).map(([k]) => esc(k)).join(", ")}); the env value wins at runtime.</p>` : ""}
   <div class="row"><span class="hint">Effective post channel: <span class="kbd">${esc(d.effective?.channelId || "—")}</span></span><span class="spacer"></span><button type="button" class="btn sm primary" id="dc-save">${icon("save")} Save Discord</button></div>`)
-  + bindingsSection(d)
   + section("Discord commands", `
   <p class="hint">Type these in any channel the bot can read.</p>
   <div class="tblwrap"><table class="tbl"><thead><tr><th>Command</th><th>Runs</th><th>Kind</th></tr></thead><tbody>
   ${flows.map((f) => `<tr><td><span class="kbd">!${esc(f.trigger.command)} &lt;text&gt;</span></td><td>${esc(f.title || f.id)}<br><span class="hint">${esc(f.description || "")}</span></td><td>automation</td></tr>`).join("")}
-  ${(d.commands || []).map((b) => `<tr><td><span class="kbd">!${esc(b.command)} &lt;text&gt;</span></td><td>${esc(b.target)}</td><td>${esc(b.kind)} (binding)</td></tr>`).join("")}
   ${(S.loopTypes || []).map((t) => `<tr><td><span class="kbd">!pipeline ${esc(t.id)} &lt;goal&gt;</span></td><td>${esc(t.name)}<br><span class="hint">${(t.steps || []).map((s) => esc(s.role)).join(" → ")}</span></td><td>pipeline</td></tr>`).join("")}
   <tr><td colspan="3" class="hint">Built-ins: ${BUILTIN_CMDS.map((b) => `<span class="kbd">${esc(b)}</span>`).join(" ")} · or just @mention the bot.</td></tr>
   </tbody></table></div>`);
@@ -133,22 +131,6 @@ function pipelinesTab() {
     <div class="pipe">${(t.steps || []).map((s, i) => `<div class="pnode" title="${esc(s.goal)}"><b>${esc(s.role)}</b><span>${esc(String(s.goal).slice(0, 48))}</span></div>${i < t.steps.length - 1 ? `<span class="arr">→</span>` : ""}`).join("")}</div>
     <div class="row">${fld("Goal", `<input id="pprun-goal-${esc(t.id)}" placeholder="What should this pipeline do?">`, "grow")}<button type="button" class="btn sm primary" data-pprun="${esc(t.id)}">${icon("play")} Run</button></div>
   </div>`).join("") || emptyState("git-branch", "No pipelines", "Create one above.")}`);
-}
-
-/** Command → automation | pipeline bindings (config/discord.json "commands"). */
-function bindingsSection(d) {
-  const binds = S.dcBinds ?? d.commands ?? [];
-  const autos = (S.flows || []).map((f) => f.id);
-  const pipes = (S.loopTypes || []).map((t) => t.id);
-  return section(`Command bindings (${binds.length})`, `
-  <p class="hint">Bind your own <span class="kbd">!command</span> to an existing automation or pipeline — no restart. The text after the command becomes <span class="kbd">{{trigger.text}}</span> (automation) or the goal (pipeline). Build the automations themselves in <b>Automations</b>.</p>
-  ${binds.map((b, i) => `<div class="row">
-    ${fld("Command (no !)", `<input data-bi="${i}" data-bf="command" value="${esc(b.command || "")}" placeholder="ship" maxlength="24">`)}
-    ${fld("Runs", `<select data-bi="${i}" data-bf="kind">${opt("automation", b.kind, "Automation")}${opt("pipeline", b.kind, "Pipeline")}</select>`)}
-    ${fld("Target", `<select data-bi="${i}" data-bf="target">${opt("", b.target || "", "— pick —")}${(b.kind === "pipeline" ? pipes : autos).map((t) => opt(t, b.target)).join("")}</select>`, "grow")}
-    <button type="button" class="btn sm danger" data-bdel="${i}" aria-label="Remove binding ${i + 1}">${icon("trash-2")}</button></div>`).join("") || `<p class="hint">No custom bindings yet.</p>`}
-  <div class="row"><button type="button" class="btn sm" id="dc-addbind">${icon("plus")} Add binding</button><span class="spacer"></span>
-    <button type="button" class="btn sm primary" id="dc-savebind">${icon("save")} Save bindings</button></div>`);
 }
 
 function secretsTab() {

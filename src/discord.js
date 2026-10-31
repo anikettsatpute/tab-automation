@@ -4,10 +4,6 @@ import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.
 import { handleRickMessage, workflowCatalog } from "./planner.js";
 import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutboxDeduped, listAutomations } from "./db.js";
 import { onLoopEvent } from "./loop/engine.js";
-import { readFileSync, existsSync } from "node:fs";
-import path from "node:path";
-import { commandBindings, findCommandBinding } from "./discord-commands.js";
-export { findCommandBinding };
 
 // Durable Discord enqueue args: preserves configured workflow agents/prompts
 // (automation kind runs the real steps; ephemeral pipelines run as request
@@ -76,24 +72,12 @@ export function findDiscordAutomation(cfg, cmd) {
   return (cfg.workflows || []).find((w) => w.trigger?.type === "discord" && w.trigger?.command === cmd && w.enabled !== false) || null;
 }
 
-function findAutomationById(cfg, id) {
-  try {
-    const a = listAutomations(cfg.root).find((x) => x.id === id && x.enabled);
-    if (a) return { id: a.id, name: a.name, trigger: { type: "discord" }, steps: a.steps };
-  } catch { /* DB optional */ }
-  return (cfg.workflows || []).find((w) => w.id === id && w.enabled !== false) || null;
-}
-
 /** Discord commands that exist only in the DB (created from the dashboard). */
 function dbCommandCatalog(cfg) {
   try {
     const fileIds = new Set((cfg.workflows || []).map((w) => w.id));
     const extra = listAutomations(cfg.root).filter((a) => a.enabled && a.trigger_type === "discord" && a.trigger_config?.command && !fileIds.has(a.id));
-    let out = extra.length ? "\n" + extra.map((a) => `- ${a.id} [!${a.trigger_config.command}] :: ${(a.steps || []).map((s) => `${s.id}:${s.type}`).join(" -> ")}${a.description ? ` — ${a.description}` : ""}`).join("\n") : "";
-    const p = path.join(cfg.root, "config", "discord.json");
-    const binds = existsSync(p) ? commandBindings(JSON.parse(readFileSync(p, "utf8"))) : [];
-    if (binds.length) out += "\n" + binds.map((b) => `- [!${b.command}] → ${b.kind} ${b.target}`).join("\n");
-    return out;
+    return extra.length ? "\n" + extra.map((a) => `- ${a.id} [!${a.trigger_config.command}] :: ${(a.steps || []).map((s) => `${s.id}:${s.type}`).join(" -> ")}${a.description ? ` — ${a.description}` : ""}`).join("\n") : "";
   } catch { return ""; }
 }
 
@@ -258,29 +242,20 @@ export function startDiscord(cfg, deps) {
           for (const part of chunk(reply)) await msg.reply(part);
           return;
         }
-        const startPipeline = async (typeId, goal, usage) => {
+        if (cmd === "pipeline") {
+          const [typeId, ...goal] = rest;
           const { loadTaskTypes } = await import("./loop/task-types.js");
           const tt = loadTaskTypes(cfg.root).find((t) => t.id === typeId);
           if (!tt || !goal.length) {
-            await msg.reply(`Usage: \`${usage}\`. ${tt ? "" : `Unknown pipeline \`${typeId || ""}\`. `}Try \`!pipelines\`.`);
+            await msg.reply(`Usage: \`!pipeline <id> <goal>\`. ${tt ? "" : `Unknown pipeline \`${typeId || ""}\`. `}Try \`!pipelines\`.`);
             return;
           }
           const store = await import("./loop/store.js");
           const requestId = store.createRequest(cfg.root, { text: goal.join(" "), mode: "direct", source: `discord:${msg.channelId}`, taskType: tt.id, dispatcher: "muse" });
           await msg.reply(`🧬 Pipeline **${tt.id}** (${tt.steps.map((s) => s.role).join(" → ")}) queued as request \`${requestId}\` — the final output posts here when the last agent finishes.`);
-        };
-        if (cmd === "pipeline") {
-          const [typeId, ...goal] = rest;
-          await startPipeline(typeId, goal, "!pipeline <id> <goal>");
           return;
         }
-        // Dashboard-configured bindings (config/discord.json "commands"), read live.
-        const binding = findCommandBinding(cfg, cmd);
-        if (binding?.kind === "pipeline") {
-          await startPipeline(binding.target, rest, `!${cmd} <goal>`);
-          return;
-        }
-        const wf = binding?.kind === "automation" ? findAutomationById(cfg, binding.target) : findDiscordAutomation(cfg, cmd);
+        const wf = findDiscordAutomation(cfg, cmd);
         if (wf) {
           // Durable enqueue: worker is the sole executor; reply is the ack.
           // kind=automation so the flow's real steps run with {{trigger.text}}.

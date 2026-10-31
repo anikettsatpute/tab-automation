@@ -372,7 +372,7 @@ test("config view: sectioned tabs, builders wired, dirty edits survive the tick"
   const mainSrc = readFileSync("dashboard-app/src/main.js", "utf8");
   for (const t of ["providers", "discord", "agents", "pipelines", "secrets"]) assert.ok(cfgSrc.includes(`["${t}",`), `tab ${t}`);
   assert.ok(!cfgSrc.includes(`["automations",`), "automation builder lives only in Automations");
-  for (const id of ["#cfg-addprov", "#cfg-addagent", "#dc-save", "#pp-save", "#dc-savebind", "#env-save", "[data-envclear]", "[data-cfgtab]", "[data-pprun]"]) assert.ok(mainSrc.includes(id), `wired ${id}`);
+  for (const id of ["#cfg-addprov", "#cfg-addagent", "#dc-save", "#pp-save", "#env-save", "[data-envclear]", "[data-cfgtab]", "[data-pprun]"]) assert.ok(mainSrc.includes(id), `wired ${id}`);
   assert.ok(cfgSrc.includes('type="${k.secret ? "password" : "text"}"'), "secret inputs are password fields");
   assert.ok(mainSrc.includes("S.cfgDirty && S.cfgData"), "tick keeps unsaved edits");
   assert.ok(mainSrc.includes("delete providers.keyStatus"), "derived keyStatus never saved");

@@ -130,25 +130,6 @@ test("automation builder: command validation + discord lookup", async () => {
   assert.equal(findDiscordAutomation(cfg, "nope"), null);
 });
 
-test("discord command bindings: validated, saved, resolved live", async () => {
-  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
-  const post = (commands) => req(app, "/api/control/config/discord", { method: "POST", body: { mainChannelId: "111111", commands } });
-  assert.equal((await post([{ command: "todo", kind: "pipeline", target: "t1" }])).status, 400, "built-in");
-  assert.equal((await post([{ command: "ship", kind: "pipeline", target: "ghost" }])).status, 400, "unknown pipeline");
-  assert.equal((await post([{ command: "ship", kind: "pipeline", target: "t1" }, { command: "ship", kind: "pipeline", target: "t1" }])).status, 400, "duplicate");
-  const ok = await json(await post([{ command: "ship", kind: "pipeline", target: "t1" }]));
-  assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  assert.deepEqual(ok.data.discord.commands, [{ command: "ship", kind: "pipeline", target: "t1" }]);
-  const { findCommandBinding } = await import("../../src/discord.js");
-  assert.equal(findCommandBinding(cfg, "ship").target, "t1");
-  // An automation trigger cannot steal a bound command.
-  const auto = { id: "x", title: "X", trigger_type: "discord", trigger_config: { command: "ship" }, steps: [{ id: "s1", type: "agent", agent: "writer" }] };
-  assert.equal((await req(app, "/api/control/automations", { method: "POST", body: auto })).status, 409);
-  // Saving routing ids without `commands` keeps existing bindings.
-  await req(app, "/api/control/config/discord", { method: "POST", body: { mainChannelId: "222222" } });
-  assert.equal(readJson("config/discord.json").commands.length, 1);
-});
-
 test(".env editor: allowlisted, write-only, atomic 0600, hot-applied, audited by name", async () => {
   const { statSync } = await import("node:fs");
   writeFileSync(join(root, ".env"), "# keep me\nDISCORD_BOT_TOKEN=old-token-value\nOTHER=1\n");
