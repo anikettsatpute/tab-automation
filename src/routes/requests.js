@@ -282,6 +282,29 @@ export function registerRequestRoutes(app, ctx) {
     } catch (err) { return c.json({ error: err.message }, 500); }
   });
 
+  // Router session for one inbound message: decision + parsed CLI transcript + linked loop tasks.
+  app.get("/api/control/brain/:id/session", async (c) => {
+    try {
+      const row = listBrainMessages(root, { limit: 500 }).find((m) => m.id === c.req.param("id"));
+      if (!row) return c.json({ error: "not found" }, 404);
+      const { routerDir } = await import("../router.js");
+      const { parseTranscript } = await import("../loop/transcript.js");
+      const { readFileSync, existsSync } = await import("node:fs");
+      const dir = routerDir(root, row.job_id || row.id);
+      const read = (f, max) => { const p = `${dir}/${f}`; return existsSync(p) ? readFileSync(p, "utf8").slice(0, max) : null; };
+      let router = null;
+      try { router = row.session_log ? JSON.parse(row.session_log) : null; } catch {}
+      const tx = read("transcript.jsonl", 2000000);
+      let tasks = [];
+      const reqId = /^req:(\w+)$/.exec(row.linked_task_id || "")?.[1];
+      if (reqId) {
+        const store = await import("../loop/store.js");
+        tasks = (store.listRequests(root, { limit: 200 }).find((r) => r.id === reqId)?.tasks) || [];
+      }
+      return c.json({ ok: true, router, prompt: read("prompt.md", 20000), chat: tx ? parseTranscript(tx) : null, tasks, requestId: reqId || null });
+    } catch (err) { return c.json({ error: err.message }, 500); }
+  });
+
   app.post("/api/control/brain", async (c) => {
     const g = (await import("../services/access.js")).mutationGuard(c);
     if (!g.ok) return c.json({ error: g.error }, g.status);

@@ -102,6 +102,7 @@ let sendDiscord = async () => {};
 const deps = {
   log,
   sendDiscord: (...a) => sendDiscord(...a),
+  routeIntent: async (...a) => (await import("./router.js")).routeIntent(...a),
   // replyTo: async (text) fn for in-thread completion/failure notices (discord triggers only)
   // channelId/messageId persist in the job payload so the worker can post
   // the ACTUAL result back to the originating channel/thread on completion.

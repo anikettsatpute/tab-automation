@@ -3,6 +3,7 @@
 // Pure render functions — state + events live in main.js.
 import { S, esc, agentIds } from "./state.js";
 import { lpill } from "./loop.js";
+import { chatView } from "./chat.js";
 import { pageHead, statRow, emptyState, section, pill, toolbar, searchBox, selectBox, icon } from "./ui.js";
 export function agentsView() {
   return `
@@ -71,7 +72,26 @@ export function brainView() {
   ${sel.processingError ? `<div class="status bad">${esc(sel.processingError)}</div>` : ""}
   <p class="dim">From <b>${esc(sel.sender)}</b> · status ${esc(st(sel))}</p><div class="endgoal">${esc(String(txt(sel)).slice(0, 2000))}</div>
   ${sel.requestText ? `<p class="dim">Request:</p><pre class="out">${esc(String(sel.requestText).slice(0, 1000))}</pre>` : ""}`
-  : `<p class="dim">Runner: Discord poller · channel ${esc(sel.channelId || sel.conversationId || "—")}</p><pre class="out">${esc(String(sel.sessionLog || txt(sel)).slice(0, 2000))}</pre>`}</div>` : ""}</div>`;
+  : brainSession(sel)}</div>` : ""}</div>`;
+}
+
+function brainSession(sel) {
+  const key = `brain:${sel.id}`;
+  const s = S.chats?.[key];
+  const r = s?.router || null;
+  const d = r?.decision || null;
+  const head = `<div class="sessgrid"><span>Runner</span><span>${esc(r?.dispatcher === "copilot" ? "GitHub Copilot CLI" : r?.dispatcher === "muse" ? "Muse CLI" : "Keyword router (no AI session)")}</span>
+  ${r?.sessionId ? `<span>Session</span><span class="kbd">${esc(r.sessionId)}</span>` : ""}
+  ${d ? `<span>Decision</span><span><b>${esc(d.action)}</b>${d.automationId ? ` · ${esc(d.automationId)}` : ""}${d.taskType ? ` · ${esc(d.taskType)}` : ""}</span><span>Why</span><span>${esc(d.reason || "—")}</span>` : ""}
+  ${d?.goal ? `<span>Goal</span><span>${esc(d.goal)}</span>` : ""}
+  ${d?.question ? `<span>Asked</span><span>${esc(d.question)}</span>` : ""}
+  ${r?.durationMs ? `<span>Duration</span><span>${(r.durationMs / 1000).toFixed(1)}s${r.exitCode != null ? ` · exit ${r.exitCode}` : ""}</span>` : ""}
+  ${r?.error ? `<span>Error</span><span>${esc(r.error)}</span>` : ""}
+  ${sel.linkedTaskId ? `<span>Linked work</span><span class="kbd">${esc(sel.linkedTaskId)}</span>` : ""}</div>`;
+  const tasks = (s?.tasks || []).length ? `<div class="lsec-h">${icon("list-ordered")} Pipeline tasks</div><ul class="plain">${s.tasks.map((t) => `<li><button type="button" class="btn sm ghost" data-gotask="${esc(t.id)}">#${esc(t.seq)} ${esc(t.title)}</button> ${lpill(t.status)}</li>`).join("")}</ul>` : "";
+  return `<div data-chatload="${esc(key)}">${!s || s.loading ? `<p class="hint" role="status">Loading session…</p>` : s.error ? `<div class="status bad" role="alert">${esc(s.error)}</div>` : `${head}${tasks}
+  ${s.prompt ? `<details><summary class="hint">Router prompt</summary><pre class="out">${esc(s.prompt)}</pre></details>` : ""}
+  <div class="lsec-h">${icon("terminal")} Session</div>${s.chat ? chatView(s.chat, key) : `<p class="hint">No CLI session for this message.</p>`}`}</div>`;
 }
 
 export function requestsView() {

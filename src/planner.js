@@ -4,7 +4,11 @@
 // envelope file, reconciliation, in-channel delivery).
 import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, recentChannel } from "./memory.js";
-import { listRuns, addTodo, listTodos, completeTodo, addReminder } from "./db.js";
+import { listRuns, addTodo, listTodos, completeTodo, addReminder, listReminders, listAutomations } from "./db.js";
+import { loadTaskTypes } from "./loop/task-types.js";
+import { buildRouterPrompt, routerDispatcher } from "./router.js";
+
+const routerDispatcherId = () => routerDispatcher() || "muse";
 
 const BIG_TASK_HINTS = /\b(order|book|buy|plan|organize|arrange|research|compare|track|monitor|pay|send|create|build|make me|do it|handle)\b/i;
 
@@ -120,6 +124,116 @@ export function planPipeline(cfg, text, historyBlock = "") {
   };
 }
 
+function routerCatalogs(cfg) {
+  const autos = new Map();
+  for (const w of cfg.workflows ?? []) if (w.enabled !== false) autos.set(w.id, { id: w.id, name: w.name || w.id, description: w.description || "", command: w.trigger?.type === "discord" ? w.trigger.command : null });
+  try {
+    for (const a of listAutomations(cfg.root)) if (a.enabled) autos.set(a.id, { id: a.id, name: a.name || a.id, description: a.description || "", command: a.trigger_type === "discord" ? a.trigger_config?.command || null : null });
+  } catch {}
+  let pipelines = [];
+  try { pipelines = loadTaskTypes(cfg.root); } catch {}
+  return { automations: [...autos.values()], pipelines };
+}
+
+const fmtTodos = (rows) => rows.length ? rows.map((t) => `• \`${t.id}\` ${t.text}${t.due ? ` — due ${t.due}` : ""}${t.priority ? ` (${t.priority})` : ""}`).join("\n") : "No open todos.";
+
+/** AI-routed handling. Returns a planner result, or null to fall back to keyword routing. */
+async function aiRoute(cfg, deps, msg, text, channelHistory) {
+  const { automations, pipelines } = routerCatalogs(cfg);
+  const todos = listTodos(cfg.root, { limit: 30 });
+  const prompt = buildRouterPrompt({ text, user: msg.author?.tag, history: channelHistory, automations, pipelines, todos });
+  await msg.channel?.sendTyping?.().catch(() => {});
+  const { decision: d, session } = await deps.routeIntent(cfg, { id: msg.id || `adhoc-${Date.now().toString(36)}`, prompt });
+  if (!d) {
+    deps.log?.(`[router] fallback to keyword routing: ${session?.error || "no decision"}`);
+    return null;
+  }
+  const say = async (t) => { for (const part of chunk(t)) await msg.reply(part); };
+  const remember = (reply) => {
+    saveMemory(cfg.root, { kind: "chat", user: msg.author?.tag, text, channelId: msg.channelId });
+    saveMemory(cfg.root, { kind: "reply", user: "Rick", text: String(reply).slice(0, 500), channelId: msg.channelId });
+  };
+  const base = { router: { ...session, decision: d } };
+  const user = msg.author?.tag || "";
+  const userId = msg.author?.id || "";
+  switch (d.action) {
+    case "clarify": {
+      const q = String(d.question || "Can you say a bit more about what you want?");
+      remember(q); await say(`🤔 ${q}`);
+      return { ...base, kind: "clarify" };
+    }
+    case "chat": {
+      if (!String(d.reply || "").trim()) return null;
+      remember(d.reply); await say(String(d.reply));
+      return { ...base, kind: "chat-reply" };
+    }
+    case "list_todos": {
+      const r = `📝 Open todos:\n${fmtTodos(todos)}`;
+      remember(r); await say(r);
+      return { ...base, kind: "list" };
+    }
+    case "list_reminders": {
+      const rows = listReminders(cfg.root, {});
+      const r = rows.length ? `⏰ Pending reminders:\n${rows.map((x) => `• \`${x.id}\` ${x.text} — ${x.at}`).join("\n")}` : "⏰ No pending reminders.";
+      remember(r); await say(r);
+      return { ...base, kind: "list" };
+    }
+    case "list_catalog": {
+      const r = `⚙️ Automations:\n${automations.map((a) => `• \`${a.id}\`${a.description ? ` — ${a.description}` : ""}`).join("\n") || "(none)"}\n\n🧩 Pipelines:\n${pipelines.map((p) => `• \`${p.id}\` — ${p.name}`).join("\n") || "(none)"}`;
+      remember(r); await say(r);
+      return { ...base, kind: "list" };
+    }
+    case "add_todo": {
+      if (!String(d.text || "").trim()) return null;
+      const pr = /^P[1-4]$/.test(String(d.priority || "")) ? d.priority : "P3";
+      const id = addTodo(cfg.root, { text: d.text, due: d.due || null, priority: pr, user, channelId: msg.channelId });
+      const r = `📝 Added todo \`${id}\`: ${d.text}${d.due ? ` — due ${d.due}` : ""} (${pr})`;
+      remember(r); await say(r);
+      return { ...base, kind: "todo" };
+    }
+    case "complete_todo": {
+      const ok = d.id && completeTodo(cfg.root, String(d.id));
+      const r = ok ? `✅ Done: todo \`${d.id}\`` : `Couldn't find open todo \`${d.id || "?"}\`.\n${fmtTodos(todos)}`;
+      remember(r); await say(r);
+      return { ...base, kind: "todo" };
+    }
+    case "add_reminder": {
+      const at = new Date(String(d.at || ""));
+      if (!d.text || Number.isNaN(at.getTime())) { await say("⏰ When should I remind you, and about what?"); return { ...base, kind: "clarify" }; }
+      const id = addReminder(cfg.root, { text: d.text, at: at.toISOString(), user, channelId: msg.channelId });
+      const r = `⏰ Reminder \`${id}\` set for ${at.toISOString().slice(0, 16).replace("T", " ")} UTC: ${d.text}`;
+      remember(r); await say(r);
+      return { ...base, kind: "reminder" };
+    }
+    case "run_automation": {
+      const a = automations.find((x) => x.id === d.automationId);
+      if (!a) { await say(`Which automation? Available: ${automations.map((x) => `\`${x.id}\``).join(", ")}`); return { ...base, kind: "clarify" }; }
+      const wf = (cfg.workflows ?? []).find((w) => w.id === a.id) || { id: a.id, name: a.name, steps: [] };
+      remember(`Queued automation ${a.id}`);
+      const ctx = await deps.runWorkflow(wf, {
+        kind: "discord", automation: a.id, command: a.command || a.id,
+        text: String(d.text || text), user, userId, channelId: msg.channelId, messageId: msg.id || null,
+      }, msg.channelId, say);
+      return { ...base, kind: "workflow", pipeline: a.id, jobId: ctx?._jobId || ctx?.jobId || null, status: "queued" };
+    }
+    case "create_task": {
+      const tt = pipelines.find((p) => p.id === d.taskType) || pipelines.find((p) => p.id === "generic") || pipelines[0];
+      const goal = String(d.goal || text).trim();
+      if (!tt || !goal) return null;
+      const store = await import("./loop/store.js");
+      const reqId = store.createRequest(cfg.root, {
+        text: goal, mode: "direct", taskType: tt.id, dispatcher: routerDispatcherId(),
+        source: `discord:${msg.channelId}:${userId || "0"}:${msg.id || "0"}`,
+      });
+      remember(`Created ${tt.id} task (request ${reqId}): ${goal}`);
+      await say(`🧩 On it — **${tt.name}** pipeline (${(tt.steps || []).map((s) => s.role).join(" → ")}). I'll reply here with the result.`);
+      return { ...base, kind: "task", taskType: tt.id, requestId: reqId, jobId: `req:${reqId}`, status: "queued" };
+    }
+    default:
+      return null;
+  }
+}
+
 /** Handle one Discord message via Rick: classify, reply or run pipeline. */
 export async function handleRickMessage(cfg, deps, msg, text) {
   // Single-response contract: exactly ONE user-visible ack per message.
@@ -147,6 +261,12 @@ export async function handleRickMessage(cfg, deps, msg, text) {
   const historyBlock = channelHistory.length
     ? `\n\nRecent conversation in this channel (oldest first, use for "run it" / follow-ups):\n${channelHistory.map((h) => `[${h.user}]: ${h.text.slice(0, 300)}`).join("\n")}`
     : "";
+
+  // AI router first (deps.routeIntent wired in index.js); keyword routing below is the fallback.
+  if (typeof deps.routeIntent === "function") {
+    const routed = await aiRoute(cfg, deps, msg, text, channelHistory);
+    if (routed) return routed;
+  }
 
   // 0) list automations -> deterministic full catalog, no LLM involved
   if (/\b(list|show|what).{0,30}(automation|workflow)/i.test(text) || /\bautomations\b/i.test(text)) {

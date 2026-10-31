@@ -19,6 +19,7 @@ export const ENV_KEYS = {
   MUSE_KEY: { secret: true, group: "providers", hint: "Muse CLI key" },
   CONTROL_TOKEN: { secret: true, group: "access", hint: "Required for remote (tunnel) dashboard access" },
   LOOP_MUSE_SANDBOX: { secret: false, group: "runtime", hint: "'off' disables the Muse sandbox" },
+  ROUTER_DISPATCHER: { secret: false, group: "discord", hint: "@mention intent router: muse (default), copilot, or off (keyword routing)" },
   TZ: { secret: false, group: "runtime", hint: "Timezone, e.g. Asia/Kolkata. Restart required." },
 };
 const NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;

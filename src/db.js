@@ -1057,9 +1057,11 @@ export function listBrainMessages(root, { status = null, limit = 50 } = {}) {
   return db.prepare("SELECT * FROM brain_messages ORDER BY received_at DESC LIMIT ?").all(limit);
 }
 
-export function updateBrainMessage(root, id, { processingStatus = null, outboxSummary = null, processingError = null, linkedTaskId = null } = {}) {
+export function updateBrainMessage(root, id, { processingStatus = null, outboxSummary = null, processingError = null, linkedTaskId = null, sessionLog = null, requestText = null } = {}) {
   const sets = [];
   const args = [];
+  if (sessionLog !== null) { sets.push("session_log = ?"); args.push(String(sessionLog).slice(0, 8000)); }
+  if (requestText !== null) { sets.push("request_text = ?"); args.push(String(requestText).slice(0, 4000)); }
   if (processingStatus !== null) { sets.push("processing_status = ?"); args.push(String(processingStatus).slice(0, 40)); }
   if (outboxSummary !== null) { sets.push("outbox_summary = ?"); args.push(String(outboxSummary).slice(0, 500)); }
   if (processingError !== null) { sets.push("processing_error = ?"); args.push(String(processingError).slice(0, 2000)); }

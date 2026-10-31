@@ -578,9 +578,10 @@ function loadVisibleChats() {
     if (S.chats[key] || chatInflight.has(key)) return;
     chatInflight.add(key);
     const [kind, a, b] = key.split(":");
-    const url = kind === "loop" ? `${LOOP}/tasks/${encodeURIComponent(S.sel)}/attempts/${encodeURIComponent(a)}/chat` : `/api/control/task/${encodeURIComponent(a)}/sessions/${encodeURIComponent(b)}/export`;
+    const url = kind === "brain" ? `/api/control/brain/${encodeURIComponent(a)}/session`
+      : kind === "loop" ? `${LOOP}/tasks/${encodeURIComponent(S.sel)}/attempts/${encodeURIComponent(a)}/chat` : `/api/control/task/${encodeURIComponent(a)}/sessions/${encodeURIComponent(b)}/export`;
     api(url, {}, { timeoutMs: 60000 })
-      .then((r) => { S.chats[key] = r.chat || { format: "none", items: [], meta: {} }; })
+      .then((r) => { S.chats[key] = kind === "brain" ? r : r.chat || { format: "none", items: [], meta: {} }; })
       .catch((e) => { S.chats[key] = { error: `Session unavailable: ${e.message}` }; })
       .finally(() => { chatInflight.delete(key); render(); });
   });

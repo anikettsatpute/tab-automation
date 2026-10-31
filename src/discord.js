@@ -2,7 +2,7 @@ import { Client, GatewayIntentBits, Events } from "discord.js";
 import { chunk } from "./workflow.js";
 import { saveMemory, searchMemory, formatMemories, memoryStats } from "./memory.js";
 import { handleRickMessage, workflowCatalog } from "./planner.js";
-import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, queueOutboxDeduped, listAutomations } from "./db.js";
+import { listRuns, getRun, addTodo, listTodos, completeTodo, addReminder, listReminders, fileBrainMessage, updateBrainMessage, listBrainMessages, queueOutboxDeduped, listAutomations } from "./db.js";
 import { onLoopEvent } from "./loop/engine.js";
 
 // Durable Discord enqueue args: preserves configured workflow agents/prompts
@@ -88,15 +88,23 @@ async function postLoopResult(cfg, send, ev) {
   const store = await import("./loop/store.js");
   const task = store.getTask(cfg.root, ev.taskId);
   const req = task?.request_id ? store.getRequest(cfg.root, task.request_id) : null;
-  const m = /^discord:(\d{5,25})$/.exec(req?.source || "");
+  const m = /^discord:(\d{5,25})(?::(\d{1,25}))?(?::(\d{1,25}))?$/.exec(req?.source || "");
   if (!m) return;
+  const [, channelId, userId, messageId] = m;
   const steps = store.listSteps(cfg.root, task.id);
   const last = [...steps].reverse().find((s) => s.status === "done" && (s.output || s.summary));
   const head = ev.status === "done" ? "✅" : ev.status === "blocked" ? "⛔" : "❌";
   const body = ev.status === "done"
     ? String(last?.output || last?.summary || "(no output)")
     : String(task.blocked_reason || task.status_note || "see dashboard");
-  await send(m[1], `${head} Pipeline **${task.task_type || "task"}** · task #${task.seq} ${ev.status} (${steps.map((s) => s.role).join(" → ")}):\n${body.slice(0, 1800)}`);
+  const who = userId && userId !== "0" ? `<@${userId}> ` : "";
+  await send(channelId, `${who}${head} Pipeline **${task.task_type || "task"}** · task #${task.seq} ${ev.status} (${steps.map((s) => s.role).join(" → ")}):\n${body.slice(0, 1800)}`);
+  if (messageId && messageId !== "0") {
+    try {
+      const row = listBrainMessages(cfg.root, { limit: 100 }).find((b) => b.job_id === messageId);
+      if (row) updateBrainMessage(cfg.root, row.id, { processingStatus: ev.status === "done" ? "reply_generated" : "failed", outboxSummary: `task #${task.seq} ${ev.status}`, processingError: ev.status === "done" ? null : body.slice(0, 1000) });
+    } catch {}
+  }
 }
 
 export function startDiscord(cfg, deps) {
@@ -306,6 +314,7 @@ export function startDiscord(cfg, deps) {
         const res = await handleRickMessage(cfg, deps, msg, prompt);
         const jobId = res?.jobId || res?.runId || null;
         try {
+          if (brainId && res?.router) updateBrainMessage(cfg.root, brainId, { sessionLog: JSON.stringify(res.router), requestText: res.router.decision ? `${res.router.decision.action}: ${res.router.decision.reason || ""}` : null });
           if (brainId) {
             if (jobId && res?.status === "queued") {
               updateBrainMessage(cfg.root, brainId, { processingStatus: "running", linkedTaskId: String(jobId), outboxSummary: `queued ${jobId}` });
