@@ -23,6 +23,37 @@
       ]
     },
     {
+      "id": "email-brief-daily",
+      "name": "Daily email brief",
+      "description": "Daily 10:00 IST: last-24h Gmail inbox via Gmail MCP -> summarizer -> Discord.",
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 10 * * *",
+        "description": "10:00 IST daily"
+      },
+      "steps": [
+        {
+          "id": "gather",
+          "type": "agent",
+          "agent": "assistant",
+          "prompt": "Use the Gmail MCP tools (messages_list + message_get) to read inbox mail from the last 24 hours (up to 20 messages, skip promotions/social noise unless important). Return an evidence pack: sender, subject, 1-line summary each, and flag anything needing action or reply.",
+          "saveAs": "evidence"
+        },
+        {
+          "id": "brief",
+          "type": "agent",
+          "agent": "summarizer",
+          "prompt": "Compress this Gmail evidence pack into a Discord briefing (TL;DR + key emails + action items):\n\n{{steps.gather}}",
+          "saveAs": "briefing"
+        },
+        {
+          "id": "post",
+          "type": "discord_send",
+          "message": "📧 Daily email brief:\n\n{{steps.brief}}"
+        }
+      ]
+    },
+    {
       "id": "morning-briefing",
       "name": "Morning briefing",
       "description": "Scheduled demo: summarizer agent -> conditional Discord post.",

@@ -40,40 +40,6 @@
         "reddit-mcp-buddy"
       ],
       "num": 2,
-      "env": {
-        "REDDIT_CLIENT_ID": "${MCP_2_CLIENT_ID}",
-        "REDDIT_CLIENT_SECRET": "${MCP_2_CLIENT_SECRET}",
-        "REDDIT_REFRESH_TOKEN": "${MCP_2_REFRESH_TOKEN}",
-        "REDDIT_USERNAME": "${MCP_2_USERNAME}",
-        "REDDIT_PASSWORD": "${MCP_2_PASSWORD}"
-      },
-      "secrets": [
-        {
-          "slot": "CLIENT_ID",
-          "label": "Reddit app client ID (reddit.com/prefs/apps)"
-        },
-        {
-          "slot": "CLIENT_SECRET",
-          "label": "Reddit app client secret"
-        },
-        {
-          "slot": "REFRESH_TOKEN",
-          "label": "OAuth refresh token (filled by Sign in)"
-        },
-        {
-          "slot": "USERNAME",
-          "label": "Reddit username (script-app alternative to Sign in)"
-        },
-        {
-          "slot": "PASSWORD",
-          "label": "Reddit password (script-app alternative, never stored by Sign in)"
-        }
-      ],
-      "oauth": {
-        "provider": "reddit",
-        "scope": "identity read history",
-        "tokenEnv": "REDDIT_REFRESH_TOKEN"
-      },
       "authStatus": "ok",
       "authHint": "",
       "tools": [
@@ -94,11 +60,59 @@
         "gmail-mcp"
       ],
       "note": "Gmail: read, send, labels, drafts (37 tools). Sign in needed.",
-      "authStatus": "error",
-      "authHint": "exited (1): gmail-mcp: GOOGLE_ACCESS_TOKEN required for stdio transport\nFor OAuth support, use HTTP transport: MCP_TRANSPORT=http\n",
+      "authStatus": "ok",
+      "authHint": "",
       "num": 3,
-      "tools": [],
-      "lastTestedAt": "2026-10-31T14:39:19.879Z"
+      "tools": [
+        "get_profile",
+        "messages_list",
+        "message_get",
+        "message_send",
+        "message_forward",
+        "message_modify",
+        "message_archive",
+        "message_trash",
+        "message_untrash",
+        "message_delete",
+        "messages_batch_modify",
+        "messages_batch_delete",
+        "thread_get",
+        "threads_list",
+        "thread_modify",
+        "thread_trash",
+        "thread_untrash",
+        "thread_delete",
+        "draft_create",
+        "draft_get",
+        "drafts_list",
+        "draft_update",
+        "draft_delete",
+        "draft_send",
+        "labels_list",
+        "label_get",
+        "label_create",
+        "label_update",
+        "label_delete",
+        "attachment_get",
+        "filters_list",
+        "filter_get",
+        "filter_create",
+        "filter_delete",
+        "vacation_get",
+        "vacation_set"
+      ],
+      "lastTestedAt": "2026-11-02T17:54:00.144Z",
+      "oauth": {
+        "provider": "google",
+        "authorizationEndpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenEndpoint": "https://oauth2.googleapis.com/token",
+        "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic",
+        "tokenEnv": "GOOGLE_ACCESS_TOKEN",
+        "signedInAt": "2026-11-02T17:53:57.742Z"
+      },
+      "env": {
+        "GOOGLE_ACCESS_TOKEN": "${MCP_3_ACCESS_TOKEN}"
+      }
     },
     {
       "id": "github",

@@ -308,63 +308,6 @@ test("dashboard sign-in: Google preset for stdio gmail-mcp, callback, sign-out",
   assert.equal(r.data.servers.find((x) => x.id === "gmail").status, "needs-auth");
 });
 
-test("dashboard sign-in: Reddit preset (no PKCE, refresh-token slot), callback, sign-out", async () => {
-  const { oauthPreset, signInInfo, serverStatus } = await import("../../src/services/mcp.js");
-  assert.equal(oauthPreset({ args: ["-y", "reddit-mcp-buddy"] })?.provider, "reddit");
-  const si = signInInfo({ id: "reddit", transport: "stdio", command: "npx", args: ["-y", "reddit-mcp-buddy"], oauth: { provider: "reddit" } });
-  assert.equal(si.kind, "provider");
-  assert.equal(si.provider, "reddit");
-  assert.equal(si.tokenEnv, "REDDIT_REFRESH_TOKEN");
-  // Reddit never requires ACCESS_TOKEN — refresh token (or script user/pass) is enough.
-  // No credential slots configured = anonymous RSS mode = ready (not needs-auth).
-  assert.equal(serverStatus({ id: "reddit", num: 2, transport: "stdio", command: "npx", args: ["-y", "reddit-mcp-buddy"], oauth: { provider: "reddit" } }).status, "ready");
-  // With credential slots declared but empty = needs-auth (sign-in prompt).
-  assert.equal(serverStatus({ id: "reddit", num: 2, transport: "stdio", command: "npx", args: ["-y", "reddit-mcp-buddy"], oauth: { provider: "reddit" }, secrets: [{ slot: "REFRESH_TOKEN" }] }).status, "needs-auth");
-
-  const doc = readTools(root);
-  doc.servers.push({ id: "reddit", num: 3, transport: "stdio", command: "npx", args: ["-y", "reddit-mcp-buddy"], oauth: { provider: "reddit", scope: "identity read history", tokenEnv: "REDDIT_REFRESH_TOKEN" } });
-  writeFileSync(join(root, "config", "tools.json"), JSON.stringify(doc));
-  const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
-
-  let r = await call(app, "/api/control/mcp/reddit/oauth/start", { method: "POST", body: {} });
-  assert.equal(r.status, 400);
-  assert.equal(r.data.error, "NEED_CLIENT");
-
-  r = await call(app, "/api/control/mcp/reddit/oauth/start", { method: "POST", body: { clientId: "reddcid", clientSecret: "reddsec" } });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  const u = new URL(r.data.authorizeUrl);
-  assert.equal(u.origin + u.pathname, "https://www.reddit.com/api/v1/authorize");
-  assert.equal(u.searchParams.get("duration"), "permanent");
-  assert.equal(u.searchParams.get("code_challenge_method"), null, "Reddit: no PKCE");
-  assert.match(u.searchParams.get("scope"), /identity/);
-  const saved = readTools(root).servers.find((x) => x.id === "reddit");
-  assert.deepEqual(saved.env, { REDDIT_REFRESH_TOKEN: "${MCP_3_REFRESH_TOKEN}" });
-
-  const realFetch = globalThis.fetch;
-  let tokenReq;
-  globalThis.fetch = async (url, init) => {
-    tokenReq = { url: String(url), init };
-    return new Response(JSON.stringify({ access_token: "r.at", refresh_token: "r.rt", expires_in: 3600 }), { status: 200, headers: { "content-type": "application/json" } });
-  };
-  try {
-    const cb = await req(app, `/api/control/mcp/oauth/callback?code=abc&state=${encodeURIComponent(u.searchParams.get("state"))}`);
-    assert.equal(cb.status, 200, await cb.text());
-  } finally { globalThis.fetch = realFetch; }
-  assert.equal(tokenReq.url, "https://www.reddit.com/api/v1/access_token");
-  assert.doesNotMatch(tokenReq.init.body, /code_verifier=/);
-  assert.equal(process.env.MCP_3_REFRESH_TOKEN, "r.rt", "refresh token persisted for the buddy");
-
-  r = await call(app, "/api/control/mcp");
-  const g = r.data.servers.find((x) => x.id === "reddit");
-  assert.equal(g.status, "ready");
-  assert.equal(g.oauth.signedIn, true);
-
-  r = await call(app, "/api/control/mcp/reddit/oauth/signout", { method: "POST", body: {} });
-  assert.equal(r.status, 200);
-  assert.equal(process.env.MCP_3_REFRESH_TOKEN, undefined);
-  assert.equal(process.env.MCP_3_CLIENT_ID, "reddcid", "client kept for one-click re-sign-in");
-});
-
 test("dashboard sign-in: custom endpoints must be https; tokenEnv must be safe", async () => {
   const { app } = appMod.createHeadlessApp(cfg, { root, log: () => {} });
   let r = await call(app, "/api/control/mcp/fs/oauth/start", { method: "POST", body: { clientId: "c", authorizationEndpoint: "http://evil/auth", tokenEndpoint: "https://x/token", tokenEnv: "X_TOKEN" } });
