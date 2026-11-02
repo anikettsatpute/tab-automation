@@ -258,7 +258,12 @@ export function registerMcpRoutes(app, ctx) {
       for (const v of [clientId, clientSecret]) { const err = v && validateEnvValue(v); if (err) return c.json({ error: `client: ${err}` }, 400); }
       writeEnv(root, { [secretKey(s.num, "CLIENT_ID")]: clientId, [secretKey(s.num, "CLIENT_SECRET")]: clientSecret || null });
       s.oauth = { ...(info.provider ? { provider: info.provider } : {}), authorizationEndpoint: authEp, tokenEndpoint: tokenEp, scope, ...(tokenEnv ? { tokenEnv } : {}), signedInAt: s.oauth?.signedInAt || "" };
-      const ref = `\${${secretKey(s.num, "ACCESS_TOKEN")}}`;
+      // Reddit quirk: reddit-mcp-buddy reads the REFRESH token from env
+      // (REDDIT_REFRESH_TOKEN) and exchanges access tokens itself — it does
+      // NOT want the short-lived ACCESS_TOKEN. Point the tokenEnv var at the
+      // refresh-token slot instead of the access-token slot.
+      const isReddit = info.provider === "reddit";
+      const ref = `\${${secretKey(s.num, isReddit ? "REFRESH_TOKEN" : "ACCESS_TOKEN")}}`;
       if (s.transport === "http") s.headers = { ...(s.headers || {}), Authorization: `Bearer ${ref}` };
       else s.env = { ...(s.env || {}), [tokenEnv]: ref };
       writeTools(root, doc);
@@ -266,9 +271,12 @@ export function registerMcpRoutes(app, ctx) {
       const { verifier, challenge } = pkcePair();
       const state = newState();
       for (const [k, v] of oauthSessions) if (Date.now() - v.at > 15 * 60000) oauthSessions.delete(k);
-      oauthSessions.set(state, { id: s.id, verifier, redirectUri, tokenEndpoint: tokenEp, at: Date.now() });
+      // Reddit quirk: no PKCE (plain confidential web-app flow) and
+      // duration=permanent comes from the provider extraParams.
+      const usePkce = !isReddit;
+      oauthSessions.set(state, { id: s.id, verifier, redirectUri, tokenEndpoint: tokenEp, at: Date.now(), noPkce: isReddit });
       const u = new URL(authEp);
-      const params = { response_type: "code", client_id: clientId, redirect_uri: redirectUri, state, code_challenge: challenge, code_challenge_method: "S256", ...(scope ? { scope } : {}), ...(resource ? { resource } : {}), ...extra };
+      const params = { response_type: "code", client_id: clientId, redirect_uri: redirectUri, state, ...(usePkce ? { code_challenge: challenge, code_challenge_method: "S256" } : {}), ...(scope ? { scope } : {}), ...(resource ? { resource } : {}), ...extra };
       for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
       await audit(c, "mcp.oauth.start", s.id, mode);
       return c.json({ ok: true, authorizeUrl: u.toString(), redirectUri });
@@ -307,13 +315,20 @@ export function registerMcpRoutes(app, ctx) {
       if (!s) return page("Server removed", "That MCP server no longer exists.", 404);
       const { exchangeCode } = await import("../oauth.js");
       const env = (k) => String(process.env[secretKey(s.num, k)] || "").trim();
-      const t = await exchangeCode(sess.tokenEndpoint, { code: c.req.query("code"), redirectUri: sess.redirectUri, verifier: sess.verifier, clientId: env("CLIENT_ID"), clientSecret: env("CLIENT_SECRET") });
+      const t = await exchangeCode(sess.tokenEndpoint, { code: c.req.query("code"), redirectUri: sess.redirectUri, verifier: sess.noPkce ? "" : sess.verifier, clientId: env("CLIENT_ID"), clientSecret: env("CLIENT_SECRET") });
       saveTokens(root, s, t);
+      // Reddit quirk: the buddy keeps the refresh token in env and mints its
+      // own access tokens — persist it to the REFRESH_TOKEN slot (saveTokens
+      // already wrote ACCESS_TOKEN too; harmless, server ignores it).
+      if (s.oauth?.provider === "reddit" && t.refresh_token) {
+        writeEnv(root, { [secretKey(s.num, "REFRESH_TOKEN")]: t.refresh_token });
+      }
       s.authStatus = "ok"; s.authHint = "";
       if (s.oauth) { s.oauth.signedInAt = new Date().toISOString(); delete s.oauth.lastError; delete s.oauth.lastErrorAt; }
       writeTools(root, doc);
       await audit(c, "mcp.oauth.done", s.id, t.refresh_token ? "with refresh" : "no refresh");
-      return page("Signed in", `${esc(s.name || s.id)} is connected. Token saved as <code>${secretKey(s.num, "ACCESS_TOKEN")}</code>${t.refresh_token ? " (auto-refresh on)" : ""}. You can close this tab.`);
+      const savedSlot = s.oauth?.provider === "reddit" ? "REFRESH_TOKEN" : "ACCESS_TOKEN";
+      return page("Signed in", `${esc(s.name || s.id)} is connected. Token saved as <code>${secretKey(s.num, savedSlot)}</code>${t.refresh_token ? " (auto-refresh on)" : ""}. You can close this tab.`);
     } catch (e) { recordError(e.message); return page("Sign-in failed", esc(String(e.message).slice(0, 300)), 502); }
   });
 

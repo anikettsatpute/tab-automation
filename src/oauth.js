@@ -264,13 +264,13 @@ async function tokenPost(tokenEndpoint, params, { clientId = "", clientSecret = 
   return json;
 }
 
-/** Exchange an authorization code for tokens (PKCE). */
+/** Exchange an authorization code for tokens (PKCE). Pass verifier="" for providers without PKCE (e.g. Reddit). */
 export function exchangeCode(tokenEndpoint, { code, redirectUri, verifier, clientId = "", clientSecret = "" } = {}) {
   return tokenPost(tokenEndpoint, {
     grant_type: "authorization_code",
     code,
     redirect_uri: redirectUri,
-    code_verifier: verifier,
+    ...(verifier ? { code_verifier: verifier } : {}),
     ...(clientId ? { client_id: clientId } : {}),
   }, { clientId, clientSecret });
 }

@@ -186,7 +186,12 @@ function signInBlock(s) {
   const waiting = S.mcpAuthWait === s.id;
   const needClient = S.mcpNeedClient === s.id || (si.kind !== "discover" && !si.clientSet);
   const what = si.kind === "provider" ? `Sign in with ${esc(si.label)}` : "Sign in";
-  const steps = si.provider === "google" ? `<ol class="hint">
+  const steps = si.provider === "reddit" ? `<ol class="hint">
+      <li>Get <b>Reddit API approval</b> for your use case first (<a href="https://support.reddithelp.com/hc/en-us/requests/new?tf_42139884615700=api_request_type_developer_clone&ticket_form_id=14868593862164" target="_blank" rel="noopener noreferrer">request form</a> — Reddit controls this, approval is not self-service).</li>
+      <li><a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener noreferrer">reddit.com/prefs/apps</a> → Create app → type <b>web app</b> → redirect URI: <span class="kbd">${esc(redirectUri())}</span> <button type="button" class="btn sm ghost" data-copy="${esc(redirectUri())}">Copy</button></li>
+      <li>Paste the Client ID and secret below, press Sign in, approve on reddit.com. Scopes granted: <span class="kbd">identity read history</span> (browse/search/comments/user analysis).</li>
+      <li class="hint">No OAuth approval? Use a <b>script</b>-type app + USERNAME/PASSWORD slots below instead (password grant, same approved-app requirement).</li></ol>`
+    : si.provider === "google" ? `<ol class="hint">
       <li><a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener noreferrer">Enable the Gmail API</a> in a Google Cloud project.</li>
       <li><a href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">OAuth consent screen</a>: User type <b>External</b>, and add your Google address under <b>Test users</b> (otherwise Google says "access blocked").</li>
       <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Credentials</a> → Create credentials → OAuth client ID → <b>Web application</b> → Authorized redirect URI: <span class="kbd">${esc(redirectUri())}</span> <button type="button" class="btn sm ghost" data-copy="${esc(redirectUri())}">Copy</button></li>

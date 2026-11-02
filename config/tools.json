@@ -40,6 +40,40 @@
         "reddit-mcp-buddy"
       ],
       "num": 2,
+      "env": {
+        "REDDIT_CLIENT_ID": "${MCP_2_CLIENT_ID}",
+        "REDDIT_CLIENT_SECRET": "${MCP_2_CLIENT_SECRET}",
+        "REDDIT_REFRESH_TOKEN": "${MCP_2_REFRESH_TOKEN}",
+        "REDDIT_USERNAME": "${MCP_2_USERNAME}",
+        "REDDIT_PASSWORD": "${MCP_2_PASSWORD}"
+      },
+      "secrets": [
+        {
+          "slot": "CLIENT_ID",
+          "label": "Reddit app client ID (reddit.com/prefs/apps)"
+        },
+        {
+          "slot": "CLIENT_SECRET",
+          "label": "Reddit app client secret"
+        },
+        {
+          "slot": "REFRESH_TOKEN",
+          "label": "OAuth refresh token (filled by Sign in)"
+        },
+        {
+          "slot": "USERNAME",
+          "label": "Reddit username (script-app alternative to Sign in)"
+        },
+        {
+          "slot": "PASSWORD",
+          "label": "Reddit password (script-app alternative, never stored by Sign in)"
+        }
+      ],
+      "oauth": {
+        "provider": "reddit",
+        "scope": "identity read history",
+        "tokenEnv": "REDDIT_REFRESH_TOKEN"
+      },
       "authStatus": "ok",
       "authHint": "",
       "tools": [

@@ -38,6 +38,14 @@ export function listServers(root) {
 }
 
 export const OAUTH_PROVIDERS = {
+  reddit: {
+    label: "Reddit",
+    authorizationEndpoint: "https://www.reddit.com/api/v1/authorize",
+    tokenEndpoint: "https://www.reddit.com/api/v1/access_token",
+    extraParams: { duration: "permanent" },
+    helpUrl: "https://www.reddit.com/prefs/apps",
+    clientHint: "One-time: reddit.com/prefs/apps → create app (type: web app) → add the redirect URI below → paste the Client ID and secret here. Needs Reddit API approval for your use case.",
+  },
   google: {
     label: "Google",
     authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
@@ -50,6 +58,8 @@ export const OAUTH_PROVIDERS = {
 
 // stdio packages that take a bearer token via env: sign in on their behalf.
 const KNOWN_OAUTH = [
+  { test: (a) => /^reddit-mcp-buddy(@[\w.-]+)?$/.test(a), provider: "reddit", tokenEnv: "REDDIT_REFRESH_TOKEN",
+    scope: "identity read history" },
   { test: (a) => /^gmail-mcp(@[\w.-]+)?$/.test(a), provider: "google", tokenEnv: "GOOGLE_ACCESS_TOKEN",
     scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic" },
 ];
@@ -86,7 +96,15 @@ export function serverStatus(s) {
   const missing = serverRefs(s).filter((r) => !envVal(r));
   for (const sl of s.secrets || []) { const k = secretKey(s.num, sl.slot); if (sl.required !== false && !envVal(k) && !missing.includes(k)) missing.push(k); }
   const oauthy = !!(s.oauth || oauthPreset(s));
-  if (oauthy && !envVal(secretKey(s.num, "ACCESS_TOKEN")) && !missing.includes(secretKey(s.num, "ACCESS_TOKEN"))) missing.push(secretKey(s.num, "ACCESS_TOKEN"));
+  // Reddit quirk: auth = refresh token (script password grant also lands
+  // here via USERNAME/PASSWORD slots). ACCESS_TOKEN is minted by the buddy
+  // itself — never require it. A server with no credential slots at all is
+  // anonymous (ready, RSS-only) — not needs-auth.
+  const isRedditOauth = s.oauth?.provider === "reddit" || oauthPreset(s)?.provider === "reddit";
+  const redditCreds = ["REFRESH_TOKEN", "USERNAME", "PASSWORD"].map((slot) => secretKey(s.num, slot));
+  const hasRedditSlot = (s.secrets || []).some((x) => ["REFRESH_TOKEN", "USERNAME", "PASSWORD"].includes(String(x.slot)));
+  if (oauthy && !isRedditOauth && !envVal(secretKey(s.num, "ACCESS_TOKEN")) && !missing.includes(secretKey(s.num, "ACCESS_TOKEN"))) missing.push(secretKey(s.num, "ACCESS_TOKEN"));
+  if (isRedditOauth && hasRedditSlot && !redditCreds.some((k) => envVal(k)) && !redditCreds.some((k) => missing.includes(k))) missing.push(secretKey(s.num, "REFRESH_TOKEN"));
   const github = isGithubServer(s);
   if (missing.length) return { status: oauthy || github ? "needs-auth" : "needs-secret", missing };
   if (s.authStatus === "needed") return { status: "needs-auth", missing: [], hint: s.authHint || "" };
