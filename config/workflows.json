@@ -376,7 +376,7 @@
           "id": "gather",
           "type": "agent",
           "agent": "scout",
-          "prompt": "Use the Reddit MCP browse_subreddit tool on r/worldnews sorted by top posts from the last 24 hours. Collect the top ~15 posts (title, score, top comments). Return an evidence pack: headline, 1-line summary each, source links.",
+          "prompt": "Use ONLY the Reddit MCP browse_subreddit tool on r/worldnews (sort top, time day). Do NOT call get_post_details, search_reddit, or user_analysis — they need approved Reddit API access and fail in anonymous mode. browse_subreddit returns RSS data (score/comments are null — expected, do not retry or invent them). Collect the top ~15 posts (title + link); optionally web_fetch linked articles for 1-line context. Return an evidence pack: headline, 1-line summary each, source links.",
           "saveAs": "evidence"
         },
         {
@@ -407,7 +407,7 @@
           "id": "gather",
           "type": "agent",
           "agent": "scout",
-          "prompt": "Use the Reddit MCP browse_subreddit tool on r/artificial sorted by top posts from the last 7 days. Collect the top 20 posts (title, score, top comments). Return an evidence pack: headline, 1-line summary each, source links.",
+          "prompt": "Use ONLY the Reddit MCP browse_subreddit tool on r/artificial (sort top, time week). Do NOT call get_post_details, search_reddit, or user_analysis — they need approved Reddit API access and fail in anonymous mode. browse_subreddit returns RSS data (score/comments are null — expected, do not retry or invent them). Collect the top 20 posts (title + link); optionally web_fetch linked articles for 1-line context. Return an evidence pack: headline, 1-line summary each, source links.",
           "saveAs": "evidence"
         },
         {
