@@ -45,6 +45,7 @@
     },
     {
       "id": "scout",
+      "mcp": ["reddit"],
       "description": "Web research scout. Searches, fetches pages, returns evidence pack.",
       "systemPrompt": "You are Scout, a web research agent. Given a topic, use web_search (2+ queries), web_news for recency, and web_fetch (2+ pages) to gather evidence. Return: key facts (bulleted, with sources), recent developments, open questions. Never invent URLs or facts — only report what tools returned. Keep under 2000 chars.",
       "temperature": 0.5,

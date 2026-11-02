@@ -363,6 +363,68 @@
       ]
     },
     {
+      "id": "reddit-worldnews-daily",
+      "name": "Reddit r/worldnews daily digest",
+      "description": "Daily 09:00 IST: top last-24h r/worldnews posts via Reddit MCP -> summarizer -> Discord.",
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 9 * * *",
+        "description": "09:00 IST daily"
+      },
+      "steps": [
+        {
+          "id": "gather",
+          "type": "agent",
+          "agent": "scout",
+          "prompt": "Use the Reddit MCP browse_subreddit tool on r/worldnews sorted by top posts from the last 24 hours. Collect the top ~15 posts (title, score, top comments). Return an evidence pack: headline, 1-line summary each, source links.",
+          "saveAs": "evidence"
+        },
+        {
+          "id": "brief",
+          "type": "agent",
+          "agent": "summarizer",
+          "prompt": "Compress this r/worldnews evidence pack into a Discord briefing (TL;DR + key stories + one line on what to watch):\n\n{{steps.gather}}",
+          "saveAs": "briefing"
+        },
+        {
+          "id": "post",
+          "type": "discord_send",
+          "message": "🌍 r/worldnews — last 24h digest:\n\n{{steps.brief}}"
+        }
+      ]
+    },
+    {
+      "id": "reddit-ai-weekly",
+      "name": "Reddit r/artificial weekly digest",
+      "description": "Weekly Saturday 09:00 IST: top 20 r/artificial posts via Reddit MCP -> summarizer -> Discord.",
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 9 * * 6",
+        "description": "09:00 IST every Saturday"
+      },
+      "steps": [
+        {
+          "id": "gather",
+          "type": "agent",
+          "agent": "scout",
+          "prompt": "Use the Reddit MCP browse_subreddit tool on r/artificial sorted by top posts from the last 7 days. Collect the top 20 posts (title, score, top comments). Return an evidence pack: headline, 1-line summary each, source links.",
+          "saveAs": "evidence"
+        },
+        {
+          "id": "brief",
+          "type": "agent",
+          "agent": "summarizer",
+          "prompt": "Compress this r/artificial evidence pack into a Discord briefing (TL;DR + top breakthroughs/discussions + one line on what to watch):\n\n{{steps.gather}}",
+          "saveAs": "briefing"
+        },
+        {
+          "id": "post",
+          "type": "discord_send",
+          "message": "🤖 r/artificial — weekly top 20:\n\n{{steps.brief}}"
+        }
+      ]
+    },
+    {
       "id": "demo-haiku",
       "name": "Demo: haiku",
       "description": "!haiku <topic> — one agent writes a haiku and replies in the channel.",
